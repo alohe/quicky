@@ -285,9 +285,14 @@ program
       const packageManager = config.packageManager || "npm";
       const installCommand =
         packageManager === "bun" ? "bun install" : "npm install";
-      const runCommand = `pm2 start npm --name "${repo}" -- run dev -- --port=${port}`;
+      const buildCommand = packageManager === "bun" ? "bun run build" : "npm run build";
+      const startCommand = `pm2 start npm --name "${repo}" -- start`;
 
       execSync(`cd ${projectsDir}/${repo} && ${installCommand}`, {
+        stdio: "inherit",
+      });
+
+      execSync(`cd ${projectsDir}/${repo} && ${buildCommand}`, {
         stdio: "inherit",
       });
 
@@ -326,7 +331,7 @@ program
         process.exit(1);
       }
 
-      execSync(`cd ${projectsDir}/${repo} && ${runCommand}`, {
+      execSync(`cd ${projectsDir}/${repo} && ${startCommand}`, {
         stdio: "inherit",
       });
 
