@@ -26,7 +26,7 @@ Before using Quicky, ensure the following dependencies are installed:
 You can install Quicky globally using npm:
 
 ```bash
-npm install -g quicky
+sudo npm install -g quicky
 ```
 
 ## Usage
