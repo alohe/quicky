@@ -255,7 +255,7 @@ program
       if (fs.existsSync(repoPath) && fs.readdirSync(repoPath).length > 0) {
         console.log(
           chalk.red(
-            `Error: The directory ${repoPath} already exists and is not empty. please use the update or del command to manage the project.`
+            `Error: The directory ${repoPath} already exists and is not empty. please use the update or delete command to manage the project.`
           )
         );
         process.exit(1);
@@ -386,7 +386,7 @@ program
 
 // delete a project from the configuration and the file system
 program
-  .command("del")
+  .command("delete")
   .description(
     "Delete one or more projects from the configuration and the file system"
   )
