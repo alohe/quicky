@@ -13,13 +13,12 @@ Quicky is a Node.js-based command-line tool designed to make deploying and manag
 
 ## Prerequisites
 
-Before using Quicky, ensure the following dependencies are installed:
+Quicky requires Node.js and npm to be installed on your system. You can install them using the following commands:
 
-- **Node.js**: v14 or higher
-- **Git**: v2.0 or higher
-- **PM2**: Process manager for Node.js applications
-- **Nginx**: For reverse proxy and domain management
-- **Certbot**: For SSL certificate management
+```bash
+sudo apt update
+sudo apt install -y nodejs npm
+```
 
 ## Installation
 
