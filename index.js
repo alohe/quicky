@@ -292,12 +292,24 @@ program
       });
 
       // Prompt user to paste in the .env file
-      console.log(
-        chalk.green(
-          "Please paste in your .env file content. The nano editor will open."
-        )
-      );
-      execSync(`nano ${projectsDir}/${repo}/.env`, { stdio: "inherit" });
+      const { addEnv } = await inquirer.prompt([
+        {
+          type: "confirm",
+          name: "addEnv",
+          message: "Do you want to add a .env file?",
+          default: false,
+        },
+      ]);
+
+      if (addEnv) {
+        const envFilePath = `${projectsDir}/${repo}/.env`;
+        fs.writeFileSync(
+          envFilePath,
+          "# Add your environment variables below\n",
+          { flag: "wx" }
+        );
+        execSync(`nano ${envFilePath}`, { stdio: "inherit" });
+      }
 
       try {
         try {
@@ -462,7 +474,7 @@ program
 
 program
   .command("list")
-  .description("List the current configuration")
+  .description("List the current configuration and associated PM2 instances")
   .action(() => {
     if (config.projects.length === 0) {
       console.log(chalk.yellow("No projects found."));
@@ -475,26 +487,387 @@ program
         chalk.cyan.bold("Owner"),
         chalk.cyan.bold("Repository"),
         chalk.cyan.bold("Port"),
+        chalk.cyan.bold("PM2 Status"),
       ],
       style: {
         head: ["cyan", "bold"],
         border: ["grey"],
       },
-      colWidths: [5, 15, 20, 10],
+      colWidths: [5, 15, 20, 10, 15],
     });
 
     config.projects.forEach((project, index) => {
+      let pm2Status = "Not Running";
+      try {
+        const pm2List = execSync(`pm2 jlist`, { encoding: "utf-8" });
+        const pm2Instances = JSON.parse(pm2List);
+        const instance = pm2Instances.find(
+          (inst) => inst.name === project.repo
+        );
+        if (instance) {
+          pm2Status = instance.pm2_env.status;
+        }
+      } catch (error) {
+        pm2Status = "Error";
+      }
+
       table.push([
-        chalk.white(index),
+        chalk.white(index + 1),
         chalk.white(project.owner),
         chalk.white(project.repo),
         chalk.white(project.port),
+        pm2Status === "online" ? chalk.green(pm2Status) : chalk.red(pm2Status),
       ]);
     });
 
     console.log(chalk.green("\nCurrent Configuration:"));
     console.log(table.toString());
   });
+
+// start / stop / restart projects
+program
+  .command("manage")
+  .description("Start, stop, or restart a project")
+  .action(async () => {
+    try {
+      if (!config.projects.length) {
+        console.log(chalk.red("No projects found to manage."));
+        return;
+      }
+
+      const { selectedProject, action } = await inquirer.prompt([
+        {
+          type: "list",
+          name: "selectedProject",
+          message: "Select a project to manage:",
+          choices: config.projects.map((project) => project.repo),
+        },
+        {
+          type: "list",
+          name: "action",
+          message: "What action would you like to perform?",
+          choices: ["start", "stop", "restart"],
+        },
+      ]);
+
+      const project = config.projects.find((p) => p.repo === selectedProject);
+
+      if (!project) {
+        console.log(chalk.red("Error: Selected project not found."));
+        return;
+      }
+
+      // Check if the project is linked to any domains
+      const linkedDomains = config.projects
+        .filter((p) => p.repo === selectedProject && p.domain)
+        .map((p) => p.domain);
+
+      if (linkedDomains.length > 0) {
+        console.log(
+          chalk.green(
+            `Project ${selectedProject} is linked to the following domains:`
+          )
+        );
+        linkedDomains.forEach((domain) => console.log(chalk.blue(domain)));
+      } else {
+        console.log(
+          chalk.yellow(
+            `Project ${selectedProject} is not linked to any domains.`
+          )
+        );
+      }
+
+      const pm2Command = `pm2 ${action} ${project.repo}`;
+
+      try {
+        execSync(pm2Command, { stdio: "inherit" });
+        console.log(
+          chalk.green(`Project ${project.repo} ${action}ed successfully.`)
+        );
+      } catch (error) {
+        console.error(
+          chalk.red(
+            `Failed to ${action} project ${project.repo}: ${error.message}`
+          )
+        );
+      }
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error.message}`));
+    }
+  });
+
+// a way to manage domains and subdomains for the projects
+program
+  .command("domains")
+  .description("Manage domains and subdomains for the projects")
+  .action(async () => {
+    try {
+      // Install Nginx and Certbot if not already installed
+      try {
+        execSync("nginx -v", { stdio: "ignore" });
+      } catch (error) {
+        execSync("sudo apt install nginx -y", { stdio: "inherit" });
+      }
+
+      try {
+        execSync("certbot --version", { stdio: "ignore" });
+      } catch (error) {
+        execSync("sudo apt install certbot python3-certbot-nginx -y", {
+          stdio: "inherit",
+        });
+      }
+
+      // Read project list to get a list of existing projects and their ports.
+      const projects = config.projects;
+
+      if (projects.length === 0) {
+        console.log(
+          chalk.yellow("No projects found. Please deploy a project first.")
+        );
+        return;
+      }
+
+      const { action } = await inquirer.prompt([
+        {
+          type: "list",
+          name: "action",
+          message: "What would you like to do?",
+          choices: ["Add Domain", "Remove Domain", "Update Domain"],
+        },
+      ]);
+
+      if (action === "Add Domain") {
+        await handleAddDomain(projects);
+      } else if (action === "Remove Domain") {
+        await handleRemoveDomain(projects);
+      } else if (action === "Update Domain") {
+        await handleUpdateDomain(projects);
+      }
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error.message}`));
+    }
+  });
+
+// Function to add a new domain or subdomain and configure Nginx and SSL
+async function handleAddDomain(projects) {
+  try {
+    const { project, domain, isDefault } = await inquirer.prompt([
+      {
+        type: "list",
+        name: "project",
+        message: "Select a project to associate the domain with:",
+        choices: projects.map((p) => p.repo),
+      },
+      {
+        type: "input",
+        name: "domain",
+        message: "Enter the domain or subdomain you want to add:",
+        validate: (input) => {
+          // Basic domain validation
+          const domainRegex = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+          return domainRegex.test(input)
+            ? true
+            : "Please enter a valid domain.";
+        },
+      },
+      {
+        type: "confirm",
+        name: "isDefault",
+        message: "Is this the default domain (listening on port 80)?",
+        default: false,
+      },
+    ]);
+
+    const selectedProject = projects.find((p) => p.repo === project);
+    if (!selectedProject) {
+      console.log(chalk.red("Error: Selected project not found."));
+      return;
+    }
+
+    let nginxConfig = `
+server {
+    server_name ${domain};
+    location / {
+        proxy_pass http://localhost:${selectedProject.port};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-NginX-Proxy true;
+        proxy_busy_buffers_size   5000k;
+        proxy_buffers   4 5000k;
+        proxy_buffer_size   5000k;
+    }
+}`;
+
+    // If this is the default domain, add listen 80 directive
+    if (isDefault) {
+      nginxConfig = `
+server {
+    listen 80;
+    server_name ${domain};
+    location / {
+        proxy_pass http://localhost:${selectedProject.port};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-NginX-Proxy true;
+        proxy_busy_buffers_size   5000k;
+        proxy_buffers   4 5000k;
+        proxy_buffer_size   5000k;
+    }
+}`;
+    }
+
+    // Write Nginx config to the sites-available folder using shell command
+    const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
+    const tempFilePath = `/tmp/${domain}.conf`;
+    fs.writeFileSync(tempFilePath, nginxConfig, { mode: 0o644 });
+
+    execSync(`sudo mv ${tempFilePath} ${nginxConfigPath}`, {
+      stdio: "inherit",
+    });
+
+    execSync(
+      `sudo ln -s /etc/nginx/sites-available/${domain} /etc/nginx/sites-enabled/`,
+      { stdio: "inherit" }
+    );
+
+    // Restart Nginx to apply the changes
+    execSync(`sudo service nginx restart`, { stdio: "inherit" });
+    console.log(chalk.green(`Nginx configuration created for ${domain}.`));
+
+    // Obtain SSL certificate using Certbot
+    execSync(
+      `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${config.email}`,
+      { stdio: "inherit" }
+    );
+    console.log(
+      chalk.green(`SSL certificate obtained and configured for ${domain}.`)
+    );
+
+    // Update the config file with the new domain
+    selectedProject.domain = domain;
+    selectedProject.isDefault = isDefault;
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    console.log(
+      chalk.green(`Domain ${domain} added successfully to project ${project}.`)
+    );
+  } catch (error) {
+    console.error(chalk.red(`Failed to add domain: ${error.message}`));
+  }
+}
+
+// Function to update an existing domain or its port
+async function handleUpdateDomain(projects) {
+  try {
+    const { project, newDomain, newPort, isDefault } = await inquirer.prompt([
+      {
+        type: "list",
+        name: "project",
+        message: "Select the project you want to update:",
+        choices: projects.filter((p) => p.domain).map((p) => p.repo),
+      },
+      {
+        type: "input",
+        name: "newDomain",
+        message:
+          "Enter the new domain (leave empty to keep the current domain):",
+      },
+      {
+        type: "input",
+        name: "newPort",
+        message: "Enter the new port (leave empty to keep the current port):",
+      },
+      {
+        type: "confirm",
+        name: "isDefault",
+        message: "Is this the default domain (listening on port 80)?",
+        default: false,
+      },
+    ]);
+
+    const selectedProject = projects.find((p) => p.repo === project);
+    if (!selectedProject || !selectedProject.domain) {
+      console.log(
+        chalk.red("Error: Selected project has no associated domain.")
+      );
+      return;
+    }
+
+    const oldDomain = selectedProject.domain;
+    const oldPort = selectedProject.port;
+
+    // Get updated values, falling back to the current values if left empty
+    const updatedDomain = newDomain.trim() || oldDomain;
+    const updatedPort = newPort.trim() || oldPort;
+
+    // Remove old Nginx and SSL configuration if the domain has changed
+    if (oldDomain !== updatedDomain) {
+      await handleRemoveDomain([selectedProject]);
+    }
+
+    // Create new Nginx configuration with the updated domain or port
+    selectedProject.port = updatedPort;
+    selectedProject.isDefault = isDefault;
+    await handleAddDomain([selectedProject]);
+
+    console.log(
+      chalk.green(`Domain updated successfully for project ${project}.`)
+    );
+  } catch (error) {
+    console.error(chalk.red(`Failed to update domain: ${error.message}`));
+  }
+}
+
+// Function to remove a domain or subdomain and delete Nginx and Certbot configuration
+async function handleRemoveDomain(projects) {
+  try {
+    const { project } = await inquirer.prompt([
+      {
+        type: "list",
+        name: "project",
+        message: "Select the project you want to remove a domain from:",
+        choices: projects.filter((p) => p.domain).map((p) => p.repo),
+      },
+    ]);
+
+    const selectedProject = projects.find((p) => p.repo === project);
+    if (!selectedProject || !selectedProject.domain) {
+      console.log(
+        chalk.red("Error: Selected project has no associated domain.")
+      );
+      return;
+    }
+
+    const domain = selectedProject.domain;
+
+    // Remove Nginx configuration
+    const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
+    if (fs.existsSync(nginxConfigPath)) {
+      const command = `sudo rm -f ${nginxConfigPath} /etc/nginx/sites-enabled/${domain}`;
+      execSync(command, { stdio: "inherit" });
+      execSync(`sudo service nginx restart`, { stdio: "inherit" });
+      console.log(chalk.green(`Nginx configuration removed for ${domain}.`));
+    }
+
+    // Remove SSL certificate using Certbot
+    const certbotCommand = `sudo certbot delete --cert-name ${domain}`;
+    execSync(certbotCommand, { stdio: "inherit" });
+    console.log(chalk.green(`SSL certificate removed for ${domain}.`));
+
+    // Update the config file and remove the domain from the project
+    delete selectedProject.domain;
+    delete selectedProject.isDefault;
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    console.log(
+      chalk.green(
+        `Domain ${domain} removed successfully from project ${project}.`
+      )
+    );
+  } catch (error) {
+    console.error(chalk.red(`Failed to remove domain: ${error.message}`));
+  }
+}
 
 // Global error handling
 process.on("unhandledRejection", (reason, promise) => {
