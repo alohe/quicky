@@ -859,6 +859,26 @@ async function handleAddDomain(projects) {
       return;
     }
 
+    // Check if domain is pointing to the server's IP address using dig
+    const checkDomainPointing = async (domain) => {
+      let digResult = "";
+      const spinner = createSpinner(
+        `Checking if ${domain} points to this server...`
+      ).start();
+      while (!digResult) {
+        digResult = execSync(`dig +short ${domain}`).toString().trim();
+        if (!digResult) {
+          spinner.update({
+            text: `Waiting for ${domain} to point to this server...`,
+          });
+          await sleep(30000); // Wait for 30 seconds before checking again
+        }
+      }
+      spinner.success({ text: `${domain} is now pointing to this server.` });
+    };
+
+    await checkDomainPointing(domain);
+
     const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
     const nginxSymlinkPath = `/etc/nginx/sites-enabled/${domain}`;
 
