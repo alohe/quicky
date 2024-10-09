@@ -39,7 +39,9 @@ async function checkForUpdates() {
 }
 
 // Check for updates
-checkForUpdates();
+if (!process.argv.includes("upgrade")) {
+  checkForUpdates();
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = console.log;
