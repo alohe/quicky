@@ -662,9 +662,11 @@ program
           .filter((project) => selectedProjects.includes(project.repo))
           .map((project) => project.pid);
 
-        config.domains = config.domains.filter(
-          (domain) => !selectedProjectPIDs.includes(domain.pid)
-        );
+        if (config.domains && config.domains.length > 0) {
+          config.domains = config.domains.filter(
+            (domain) => !selectedProjectPIDs.includes(domain.pid)
+          );
+        }
 
         // delete the nginx config file and restart nginx
         const nginxConfigPath = "/etc/nginx/sites-available";
