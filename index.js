@@ -110,7 +110,7 @@ function help() {
   log("For more information, visit https://quicky.dev");
 }
 
-program.version("0.0.6").action(async () => {
+program.version("0.0.7").action(async () => {
   help();
 });
 
