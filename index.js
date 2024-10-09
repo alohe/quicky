@@ -456,6 +456,29 @@ program
       }
 
       const packageManager = config.packageManager || "npm";
+
+      // If package manager is bun, install bun and run bun install
+      if (packageManager === "bun") {
+        try {
+          execSync("bun -v", { stdio: "ignore" });
+        } catch (error) {
+          execSync("curl -fsSL https://bun.sh/install | bash", {
+            stdio: "inherit",
+          });
+        }
+      } else {
+        try {
+          execSync("npm -v", { stdio: "ignore" });
+        } catch (error) {
+          log(
+            chalk.red(
+              "Error: npm is not installed. Please install Node.js to use npm."
+            )
+          );
+          process.exit(1);
+        }
+      }
+
       const installCommand =
         packageManager === "bun" ? "bun install" : "npm install";
       const buildCommand =
