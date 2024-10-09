@@ -103,6 +103,7 @@ function help() {
       "domains"
     )}   Manage domains and subdomains for the projects`
   );
+  log(`  ${chalk.blue.bold("upgrade")}   Upgrade the CLI tool to the latest version`);
   log("");
   log("Options:");
   log("  --help    Display help for the command");
@@ -1083,6 +1084,19 @@ async function handleListDomains(projects) {
     console.error(chalk.red(`Failed to list domains: ${error.message}`));
   }
 }
+
+// Upgrade the CLI to the latest version
+program
+  .command("upgrade")
+  .description("Upgrade the CLI to the latest version")
+  .action(() => {
+    try {
+      execSync("sudo npm install -g quicky", { stdio: "inherit" });
+      log(chalk.green("Quicky CLI upgraded successfully."));
+    } catch (error) {
+      console.error(chalk.red(`Failed to upgrade the CLI: ${error.message}`));
+    }
+  });
 
 // Global error handling
 process.on("unhandledRejection", (reason, promise) => {
