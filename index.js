@@ -833,12 +833,14 @@ program
       // Read project list to get a list of existing projects and their ports.
       const projects = config.projects;
 
-      // Show a list of projects and their associated domains
-      await handleListDomains(projects);
-
       if (projects.length === 0) {
         log(chalk.yellow("No projects found. Please deploy a project first."));
         return;
+      } else {
+        // check if there are any domains already associated with the projects
+        if (config.domains && config.domains.length > 0) {
+          await handleListDomains(projects);
+        }
       }
 
       const { action } = await inquirer.prompt([
