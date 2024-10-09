@@ -90,7 +90,7 @@ function help() {
   log("Options:");
   log("  --help    Display help for the command");
   log("");
-  log("For more information, visit ");
+  log("For more information, visit https://quicky.dev");
 }
 
 program.version("0.0.5").action(async () => {

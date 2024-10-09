@@ -67,7 +67,24 @@ Lists all deployed projects and prompts you to select a project to update with t
 quicky delete
 ```
 
-Lists all deployed projects and prompts you to select multiple projects to delete.
+Prompts you to select a project to delete from the configuration and the file system.
+
+### 5. Manage Domains
+
+```bash
+quicky domains
+```
+
+Allows you to add, update, or remove domains and subdomains for your projects. Handles Nginx configuration and SSL certificates.
+
+### 6. Start, Stop, or Restart Projects
+
+```bash
+quicky manage
+```
+
+Prompts you to select a project and choose an action (start, stop, or restart) to manage the project's PM2 instance.
+
 
 ## License
 
