@@ -434,9 +434,6 @@ program
           ? uuidv4().slice(0, 5)
           : pid;
 
-      // Update the configuration file with the new project details
-      updateProjectsConfig({ pid, owner, repo, port });
-
       // Prompt user to add a .env file or not
       const { addEnv } = await inquirer.prompt([
         {
@@ -464,9 +461,16 @@ program
         try {
           execSync("bun -v", { stdio: "ignore" });
         } catch (error) {
-          execSync("curl -fsSL https://bun.sh/install | bash", {
-            stdio: "inherit",
-          });
+          try {
+            execSync("unzip -v", { stdio: "ignore" });
+          } catch (error) {
+            log(chalk.yellow("Unzip is not installed. Installing unzip..."));
+            execSync("sudo apt-get install -y unzip", { stdio: "inherit" });
+          } finally {
+            execSync("curl -fsSL https://bun.sh/install | bash", {
+              stdio: "inherit",
+            });
+          }
         }
       } else {
         try {
@@ -528,6 +532,9 @@ program
       execSync(`cd ${projectsDir}/${repo} && ${startCommand}`, {
         stdio: "inherit",
       });
+
+      // Update the configuration file with the new project details
+      updateProjectsConfig({ pid, owner, repo, port });
 
       log(`Project deployed successfully on port ${port}`);
     } catch (error) {
@@ -684,7 +691,9 @@ program
                 const nginxSymlinkFile = `${nginxSymlinkPath}/${domain.domain}`;
 
                 if (fs.existsSync(nginxConfigFile)) {
-                  execSync(`sudo rm -f ${nginxConfigFile}`, { stdio: "inherit" });
+                  execSync(`sudo rm -f ${nginxConfigFile}`, {
+                    stdio: "inherit",
+                  });
                 }
 
                 if (fs.existsSync(nginxSymlinkFile)) {
@@ -1178,7 +1187,6 @@ program
       console.error(chalk.red(`Failed to upgrade the CLI: ${error.message}`));
     }
   });
-
 
 // Global error handling
 process.on("unhandledRejection", (reason, promise) => {
