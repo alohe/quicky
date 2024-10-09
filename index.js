@@ -456,7 +456,7 @@ program
       const packageManager = config.packageManager || "npm";
       const installCommand = packageManager === "bun" ? "bun install" : "npm install";
       const buildCommand = packageManager === "bun" ? "bun run build" : "npm run build";
-      const startCommand = `pm2 start npm --name "${repo}" -- start --port ${port}`;
+      const startCommand = `pm2 start npm --name "${repo}" -- start -- --port ${port}`;
 
       // Install dependencies and build the project
       try {
