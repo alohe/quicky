@@ -47,26 +47,72 @@ const updateConfig = (project) => {
 
 const program = new Command();
 
-program
-  .version("1.0.0")
-  .description(
-    "Quicky is your go-to CLI companion for effortlessly launching and managing Next.js project deployments. Say goodbye to complexity and hello to seamless setups!"
-  )
-  .action(async () => {
-    const rainbowTitle = chalkAnimation.karaoke(`Quicky\n`);
-    await sleep(1000);
-    rainbowTitle.stop();
-    program.help();
-  });
+function help() {
+  log(
+    `${chalk.hex("#fe64fa").bold("Quicky")}${chalk.hex("#ffacfd")(
+      " - A CLI tool to deploy Next.js projects"
+    )}`
+  );
+  log("");
+  log("Usage:");
+  // use the chalk package to colorize the output
+  log(
+    `${chalk.blue("  quicky")} ${chalk.hex("#FFA500")(
+      "<command>"
+    )} ${chalk.green("[options]")}`
+  );
+  log("");
+  log("Commands:");
+  log(
+    `  ${chalk.blue.bold(
+      "init"
+    )}      Save your GitHub account details and install dependencies\n`
+  );
+  log(`  ${chalk.blue.bold("deploy")}    Deploy a Next.js project from GitHub`);
+  log(`  ${chalk.blue.bold("update")}    Update a running project`);
+  log(
+    `  ${chalk.blue.bold(
+      "delete"
+    )}    Delete a project from the configuration and the file system`
+  );
+  log(
+    `  ${chalk.blue.bold(
+      "list"
+    )}      List the current configuration and associated PM2 instances`
+  );
+  log(`  ${chalk.blue.bold("manage")}    Start, stop, or restart a project \n`);
+  log(
+    `  ${chalk.blue.bold(
+      "domains"
+    )}   Manage domains and subdomains for the projects`
+  );
+  log("");
+  log("Options:");
+  log("  --help    Display help for the command");
+  log("");
+  log("For more information, visit ");
+}
 
-// Add GitHub account
+program.version("0.0.5").action(async () => {
+  help();
+});
+
+program.option("--help", "Display help for the command").action(() => {
+  help();
+});
+
 program
   .command("init")
   .description("Save your GitHub account details and install dependencies")
-  .action(async () => {
+  .option("--username <username>", "GitHub username")
+  .option("--token <token>", "GitHub personal access token")
+  .option(
+    "--packageManager <packageManager>",
+    "Package manager to use (npm|bun)"
+  )
+  .action(async (cmd) => {
     try {
-      let { username, token, packageManager } = config.github || {};
-
+      let { username, token, packageManager } = cmd || config.github || {};
       if (!username || !token || !packageManager) {
         const answers = await inquirer.prompt([
           {
@@ -121,17 +167,32 @@ program
             });
           }
         }
-
-        log(`Configuration files are stored at: ${chalk.green(configPath)}`);
-        log(`Projects will be stored in: ${chalk.green(projectsDir)}`);
+        log(
+          `\n📁 Configuration files are stored at: ${chalk.green(configPath)}`
+        );
+        log(`📂 Projects will be stored in: ${chalk.green(projectsDir)}`);
 
         log(
-          `You can now deploy your projects using the ${chalk.green(
-            "deploy"
-          )} command and update them using the ${chalk.green(
-            "update"
-          )} command.`
+          `\n🚀 You can now deploy your Next.js projects using ${chalk.green(
+            "quicky deploy"
+          )}`
         );
+
+        // ask use if they wannt deply a project now
+        const { deployNow } = await inquirer.prompt([
+          {
+            type: "confirm",
+            name: "deployNow",
+            message: "Do you want to deploy a project now?",
+            default: false,
+          },
+        ]);
+
+        if (deployNow) {
+          execSync(`quicky deploy`, { stdio: "inherit" });
+        } else {
+          process.exit(0);
+        }
       } else {
         spinner.error({
           text: `Failed to save GitHub account details. Please ensure you have a valid personal access token. ${chalk.green(
@@ -195,12 +256,12 @@ program
       }
 
       if (!owner || !repo || !port) {
-        console.log(chalk.red("Error: Missing required arguments."));
+        log(chalk.red("Error: Missing required arguments."));
         process.exit(1);
       }
 
       if (owner.length === 0 || repo.length === 0 || port.length === 0) {
-        console.log(chalk.red("Error: Arguments cannot be empty."));
+        log(chalk.red("Error: Arguments cannot be empty."));
         process.exit(1);
       }
 
@@ -253,16 +314,20 @@ program
       const repoPath = `${projectsDir}/${repo}`;
 
       if (fs.existsSync(repoPath) && fs.readdirSync(repoPath).length > 0) {
-        console.log(
-          chalk.red(
-            `Error: The directory ${repoPath} already exists and is not empty. please use the update or delete command to manage the project.`
-          )
+        log(
+          `⚠️  The directory ${chalk
+            .hex("#FFA500")
+            .bold(
+              repoPath
+            )} already exists and is not empty. \n✨ Use the ${chalk.green(
+            "update"
+          )} or ${chalk.green("delete")} command to manage the project.`
         );
         process.exit(1);
       }
 
       if (!config.github || !config.github.access_token) {
-        console.log(
+        log(
           chalk.red(
             "Error: GitHub access token not found. Please run the init command first."
           )
@@ -285,7 +350,8 @@ program
       const packageManager = config.packageManager || "npm";
       const installCommand =
         packageManager === "bun" ? "bun install" : "npm install";
-      const buildCommand = packageManager === "bun" ? "bun run build" : "npm run build";
+      const buildCommand =
+        packageManager === "bun" ? "bun run build" : "npm run build";
       const startCommand = `pm2 start npm --name "${repo}" -- start`;
 
       execSync(`cd ${projectsDir}/${repo} && ${installCommand}`, {
@@ -335,7 +401,7 @@ program
         stdio: "inherit",
       });
 
-      console.log(`Project deployed successfully on port ${port}`);
+      log(`Project deployed successfully on port ${port}`);
     } catch (error) {
       console.error(chalk.red(`Error: ${error.message}`));
     }
@@ -348,7 +414,7 @@ program
   .action(async () => {
     try {
       if (!config.projects.length) {
-        console.log(chalk.red("No projects found to update."));
+        log(chalk.red("No projects found to update."));
         return;
       }
 
@@ -380,9 +446,7 @@ program
           stdio: "inherit",
         });
 
-        console.log(
-          chalk.green(`Project ${project.repo} updated successfully.`)
-        );
+        log(chalk.green(`Project ${project.repo} updated successfully.`));
       }
     } catch (error) {
       console.error(chalk.red(`Error: ${error.message}`));
@@ -398,7 +462,7 @@ program
   .action(async () => {
     try {
       if (!config.projects.length) {
-        console.log(chalk.red("No projects found to delete."));
+        log(chalk.yellowBright("No projects found to delete."));
         return;
       }
       const { selectedProjects } = await inquirer.prompt([
@@ -411,7 +475,7 @@ program
       ]);
 
       if (selectedProjects.length === 0) {
-        console.log(chalk.yellow("No projects selected for deletion."));
+        log(chalk.yellow("No projects selected for deletion."));
         return;
       }
 
@@ -419,12 +483,17 @@ program
         {
           type: "confirm",
           name: "confirmDelete",
-          message: `Are you sure you want to delete the selected projects?`,
+          message: `Are you sure you want to delete the selected ${
+            selectedProjects.length > 1 ? "projects" : "project"
+          }?`,
           default: false,
         },
       ]);
 
       if (confirmDelete) {
+        const spinner = createSpinner("Deleting selected projects...").start();
+        await sleep(1000);
+
         selectedProjects.forEach((selectedProject) => {
           const project = config.projects.find(
             (p) => p.repo === selectedProject
@@ -437,7 +506,7 @@ program
               execSync(`pm2 stop ${project.repo}`, { stdio: "ignore" });
               execSync(`pm2 delete ${project.repo}`, { stdio: "ignore" });
             } catch (error) {
-              console.log(
+              log(
                 chalk.yellow(
                   `Project ${project.repo} is not running on PM2. Skipping...`
                 )
@@ -450,11 +519,11 @@ program
               (p) => p.repo !== project.repo
             );
 
-            console.log(
-              chalk.green(`Project ${project.repo} deleted successfully.`)
-            );
+            log(chalk.green(`✔ Project ${project.repo} deleted successfully.`));
           }
         });
+
+        spinner.success({ text: "Selected projects deleted successfully!" });
 
         fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
@@ -466,11 +535,11 @@ program
           if (!configRepos.has(folder)) {
             const folderPath = path.join(projectsDir, folder);
             execSync(`rm -rf ${folderPath}`);
-            console.log(chalk.yellow(`Removed untracked folder: ${folder}`));
+            log(chalk.yellow(`Removed untracked folder: ${folder}`));
           }
         });
       } else {
-        console.log(chalk.yellow("Project deletion cancelled."));
+        log(chalk.yellow("Project deletion cancelled."));
       }
     } catch (error) {
       console.error(chalk.red(`Error: ${error.message}`));
@@ -482,7 +551,7 @@ program
   .description("List the current configuration and associated PM2 instances")
   .action(() => {
     if (config.projects.length === 0) {
-      console.log(chalk.yellow("No projects found."));
+      log(chalk.yellow("No projects found."));
       return;
     }
 
@@ -525,8 +594,8 @@ program
       ]);
     });
 
-    console.log(chalk.green("\nCurrent Configuration:"));
-    console.log(table.toString());
+    log(chalk.green("\nCurrent Configuration:"));
+    log(table.toString());
   });
 
 // start / stop / restart projects
@@ -536,7 +605,7 @@ program
   .action(async () => {
     try {
       if (!config.projects.length) {
-        console.log(chalk.red("No projects found to manage."));
+        log(chalk.red("No projects found to manage."));
         return;
       }
 
@@ -558,7 +627,7 @@ program
       const project = config.projects.find((p) => p.repo === selectedProject);
 
       if (!project) {
-        console.log(chalk.red("Error: Selected project not found."));
+        log(chalk.red("Error: Selected project not found."));
         return;
       }
 
@@ -568,14 +637,14 @@ program
         .map((p) => p.domain);
 
       if (linkedDomains.length > 0) {
-        console.log(
+        log(
           chalk.green(
             `Project ${selectedProject} is linked to the following domains:`
           )
         );
-        linkedDomains.forEach((domain) => console.log(chalk.blue(domain)));
+        linkedDomains.forEach((domain) => log(chalk.blue(domain)));
       } else {
-        console.log(
+        log(
           chalk.yellow(
             `Project ${selectedProject} is not linked to any domains.`
           )
@@ -586,9 +655,7 @@ program
 
       try {
         execSync(pm2Command, { stdio: "inherit" });
-        console.log(
-          chalk.green(`Project ${project.repo} ${action}ed successfully.`)
-        );
+        log(chalk.green(`Project ${project.repo} ${action}ed successfully.`));
       } catch (error) {
         console.error(
           chalk.red(
@@ -626,9 +693,7 @@ program
       const projects = config.projects;
 
       if (projects.length === 0) {
-        console.log(
-          chalk.yellow("No projects found. Please deploy a project first.")
-        );
+        log(chalk.yellow("No projects found. Please deploy a project first."));
         return;
       }
 
@@ -685,7 +750,7 @@ async function handleAddDomain(projects) {
 
     const selectedProject = projects.find((p) => p.repo === project);
     if (!selectedProject) {
-      console.log(chalk.red("Error: Selected project not found."));
+      log(chalk.red("Error: Selected project not found."));
       return;
     }
 
@@ -739,22 +804,20 @@ server {
 
     // Restart Nginx to apply the changes
     execSync(`sudo service nginx restart`, { stdio: "inherit" });
-    console.log(chalk.green(`Nginx configuration created for ${domain}.`));
+    log(chalk.green(`Nginx configuration created for ${domain}.`));
 
     // Obtain SSL certificate using Certbot
     execSync(
       `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${config.email}`,
       { stdio: "inherit" }
     );
-    console.log(
-      chalk.green(`SSL certificate obtained and configured for ${domain}.`)
-    );
+    log(chalk.green(`SSL certificate obtained and configured for ${domain}.`));
 
     // Update the config file with the new domain
     selectedProject.domain = domain;
     selectedProject.isDefault = isDefault;
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-    console.log(
+    log(
       chalk.green(`Domain ${domain} added successfully to project ${project}.`)
     );
   } catch (error) {
@@ -793,9 +856,7 @@ async function handleUpdateDomain(projects) {
 
     const selectedProject = projects.find((p) => p.repo === project);
     if (!selectedProject || !selectedProject.domain) {
-      console.log(
-        chalk.red("Error: Selected project has no associated domain.")
-      );
+      log(chalk.red("Error: Selected project has no associated domain."));
       return;
     }
 
@@ -816,9 +877,7 @@ async function handleUpdateDomain(projects) {
     selectedProject.isDefault = isDefault;
     await handleAddDomain([selectedProject]);
 
-    console.log(
-      chalk.green(`Domain updated successfully for project ${project}.`)
-    );
+    log(chalk.green(`Domain updated successfully for project ${project}.`));
   } catch (error) {
     console.error(chalk.red(`Failed to update domain: ${error.message}`));
   }
@@ -838,9 +897,7 @@ async function handleRemoveDomain(projects) {
 
     const selectedProject = projects.find((p) => p.repo === project);
     if (!selectedProject || !selectedProject.domain) {
-      console.log(
-        chalk.red("Error: Selected project has no associated domain.")
-      );
+      log(chalk.red("Error: Selected project has no associated domain."));
       return;
     }
 
@@ -852,19 +909,19 @@ async function handleRemoveDomain(projects) {
       const command = `sudo rm -f ${nginxConfigPath} /etc/nginx/sites-enabled/${domain}`;
       execSync(command, { stdio: "inherit" });
       execSync(`sudo service nginx restart`, { stdio: "inherit" });
-      console.log(chalk.green(`Nginx configuration removed for ${domain}.`));
+      log(chalk.green(`Nginx configuration removed for ${domain}.`));
     }
 
     // Remove SSL certificate using Certbot
     const certbotCommand = `sudo certbot delete --cert-name ${domain}`;
     execSync(certbotCommand, { stdio: "inherit" });
-    console.log(chalk.green(`SSL certificate removed for ${domain}.`));
+    log(chalk.green(`SSL certificate removed for ${domain}.`));
 
     // Update the config file and remove the domain from the project
     delete selectedProject.domain;
     delete selectedProject.isDefault;
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-    console.log(
+    log(
       chalk.green(
         `Domain ${domain} removed successfully from project ${project}.`
       )

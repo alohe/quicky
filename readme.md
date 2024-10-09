@@ -1,14 +1,14 @@
 # Quicky
 
-Quicky is a powerful Node.js CLI that makes server management and deployment a breeze. It's a simple and easy-to-use tool that allows you to manage your servers and deploy your projects with ease.
+A CLI tool for effortless Next.js deployment and management. Initialize, deploy from GitHub, update, delete, and manage projects. Handles PM2 instances and domain configuration. Streamlines the entire lifecycle of Next.js applications on remote servers.
 
 ## Features
 
-- 🐙 **Initialize & Deploy Projects**: Save your GitHub credentials, set up projects for deployment, and quickly clone, build, and run your Next.js projects from GitHub on specified ports.
-- ⚙️ **Process Management**: Uses PM2 to manage application lifecycles and monitoring.
-- 🌐 **Nginx & SSL Setup**: Automatically configure Nginx to route custom domains and handle SSL certificates.
-- 🔄 **Update & Delete Projects**: Keep your projects up-to-date or remove them as needed.
-- 📋 **View Project Configurations**: List and view details of all deployed projects and their configurations.
+- 🐙 **GitHub Integration**: Initialize, deploy, and manage Next.js projects directly from GitHub repositories.
+- ⚙️ **Process Management**: Leverage PM2 for application lifecycle and monitoring.
+- 🔄 **Project Maintenance**: Easily update or remove deployed projects.
+- 🌐 **Domain & SSL Automation**: Configure Nginx for custom domains and SSL certificates.
+- 📋 **Configuration Overview**: List and inspect details of all deployed projects.
 
 ## Prerequisites
 
