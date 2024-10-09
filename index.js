@@ -1161,12 +1161,24 @@ program
   .description("Upgrade the CLI to the latest version")
   .action(() => {
     try {
+      // Install the latest version of quicky globally
+      console.log(chalk.blue("Upgrading Quicky CLI to the latest version..."));
       execSync("sudo npm install -g quicky", { stdio: "inherit" });
-      log(chalk.green("Quicky CLI upgraded successfully."));
+
+      // Check and display the updated version
+      const newVersion = execSync("npm show quicky version", {
+        encoding: "utf-8",
+      }).trim();
+      console.log(
+        chalk.green(
+          `Quicky CLI upgraded successfully to version ${newVersion}.`
+        )
+      );
     } catch (error) {
       console.error(chalk.red(`Failed to upgrade the CLI: ${error.message}`));
     }
   });
+
 
 // Global error handling
 process.on("unhandledRejection", (reason, promise) => {
