@@ -49,7 +49,7 @@ Prompts you to enter your GitHub username or organization name, repository name,
 
 **Environment Variables** - During deployment, you’ll be asked if you want to add environment variables to your project or not.
 
-### 4. Manage Projects
+### 3. Manage Projects
 
 ```bash
 quicky list
@@ -69,7 +69,19 @@ quicky delete
 
 Prompts you to select a project to delete from the configuration and the file system.
 
-### 5. Manage Domains
+### 4. Start, Stop, or Restart Projects
+
+```bash
+quicky manage
+```
+
+### 5. Domains
+
+**Prerequisites** - Before adding a domain to your project, you need to:
+
+1. Purchase a domain name (e.g., [Namecheap](https://www.namecheap.com/), [GoDaddy](https://www.godaddy.com/), etc.)
+2. Purchase a Linux Ubuntu server (e.g., [Hetzner](https://www.hetzner.com/cloud/), [DigitalOcean](https://www.digitalocean.com/), etc.)
+3. Create an `A` DNS record pointing to your server IPv4 address
 
 ```bash
 quicky domains
@@ -77,21 +89,7 @@ quicky domains
 
 Allows you to **add** and **remove** domains and subdomains for your projects effortlessly. Handles Nginx configuration and SSL certificates.
 
-### 6. Start, Stop, or Restart Projects
-
-```bash
-quicky manage
-```
-
 Prompts you to select a project and choose an action (start, stop, or restart) to manage the project's PM2 instance.
-
-### 7. Upgrade Quicky
-
-```bash
-quicky upgrade
-```
-
-Updates Quicky to the latest version available on npm.
 
 ## License
 
