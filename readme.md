@@ -52,28 +52,26 @@ Prompts you to enter your GitHub username or organization name, repository name,
 ### 3. Manage Projects
 
 ```bash
+quicky manage
+```
+
+Lists all deployed projects and allows you to **start**, **stop**, **restart**, **update**, or **delete** a specific project.
+
+### 4. Configuration Overview
+
+```bash
 quicky list
 ```
 
-Displays all deployed projects along with their configurations, active ports, and associated PM2 instances.
+Displays an overview of all deployed projects, including the following details:
 
-```bash
-quicky update
-```
-
-Lists all deployed projects and prompts you to select a project to update with the latest changes from GitHub.
-
-```bash
-quicky delete
-```
-
-Prompts you to select a project to delete from the configuration and the file system.
-
-### 4. Start, Stop, or Restart Projects
-
-```bash
-quicky manage
-```
+- **PID**: Project ID.
+- **Owner**: GitHub username or organization name.
+- **Repository**: Name of the GitHub repository.
+- **Port**: Port number on which the project is running.
+- **PM2 Status**: Current status of the PM2 process.
+- **Domains**: Associated domains for the project.
+- **Last updated**: Date and time of the last deployment/update.
 
 ### 5. Domains
 
@@ -89,7 +87,13 @@ quicky domains
 
 Allows you to **add** and **remove** domains and subdomains for your projects effortlessly. Handles Nginx configuration and SSL certificates.
 
-Prompts you to select a project and choose an action (start, stop, or restart) to manage the project's PM2 instance.
+### 6. Custom Scripts
+
+```bash
+quicky run-script <script-name>
+```
+
+Allows you to run custom scripts defined in your project configuration before or after deployment.
 
 ## License
 

@@ -82,7 +82,7 @@ const updateProjectsConfig = ({
     owner,
     repo,
     port,
-    created_at: new Date().toISOString(),
+    last_updated: new Date().toISOString(),
   };
   const existing = config.projects.find((p) => p.repo === repo);
 
@@ -118,18 +118,16 @@ function help() {
     )}      Save your GitHub account details and install dependencies\n`
   );
   log(`  ${chalk.blue.bold("deploy")}    Deploy a Next.js project from GitHub`);
-  log(`  ${chalk.blue.bold("update")}    Update a running project`);
-  log(
-    `  ${chalk.blue.bold(
-      "delete"
-    )}    Delete a project from the configuration and the file system`
-  );
   log(
     `  ${chalk.blue.bold(
       "list"
     )}      List the current configuration and associated PM2 instances`
   );
-  log(`  ${chalk.blue.bold("manage")}    Start, stop, or restart a project \n`);
+  log(
+    `  ${chalk.blue.bold(
+      "manage"
+    )}    start, stop, restart, update, or delete a project \n`
+  );
   log(
     `  ${chalk.blue.bold(
       "domains"
@@ -335,10 +333,8 @@ program
             `\nProject ${chalk.bold(
               repo
             )} already exists. \nUse the ${chalk.bold(
-              "update"
-            )} command to update the project, the ${chalk.bold(
-              "delete"
-            )} command to delete the project, or the ${chalk.bold(
+              "manage"
+            )} command to manage the project or the ${chalk.bold(
               "list"
             )} command to view all your deployed projects.\n`
           )
@@ -402,8 +398,8 @@ program
             .bold(
               repoPath
             )} already exists and is not empty. \n✨ Use the ${chalk.green(
-            "update"
-          )} or ${chalk.green("delete")} command to manage the project.`
+            "manage"
+          )} command to manage the project.`
         );
         process.exit(1);
       }
@@ -544,198 +540,7 @@ program
     }
   });
 
-// Update a running project with the latest changes from the GitHub repository
-program
-  .command("update")
-  .description("Update a running project")
-  .action(async () => {
-    try {
-      if (!config.projects.length) {
-        log(chalk.red("No projects found to update."));
-        return;
-      }
-
-      const { selectedProject } = await inquirer.prompt([
-        {
-          type: "list",
-          name: "selectedProject",
-          message: "Select a project to update:",
-          choices: config.projects.map((project) => project.repo),
-        },
-      ]);
-
-      const project = config.projects.find((p) => p.repo === selectedProject);
-
-      if (project) {
-        const git = simpleGit();
-        const repoPath = `${projectsDir}/${project.repo}`;
-        const tempPath = `${tempDir}/${project.repo}`;
-
-        // Clone into temporary directory
-        await git.clone(
-          `https://github.com/${project.owner}/${project.repo}.git`,
-          tempPath
-        );
-        execSync(`cp -r ${tempPath}/* ${repoPath}`, { stdio: "inherit" });
-        execSync(`rm -rf ${tempPath}`);
-
-        execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
-          stdio: "inherit",
-        });
-
-        log(chalk.green(`Project ${project.repo} updated successfully.`));
-      }
-    } catch (error) {
-      console.error(chalk.red(`Error: ${error.message}`));
-    }
-  });
-
-// Delete a project from the configuration and the file system
-program
-  .command("delete")
-  .description(
-    "Delete one or more projects from the configuration and the file system"
-  )
-  .action(async () => {
-    try {
-      if (!config.projects.length) {
-        log(chalk.yellowBright("No projects found to delete."));
-        return;
-      }
-      const { selectedProjects } = await inquirer.prompt([
-        {
-          type: "checkbox",
-          name: "selectedProjects",
-          message: "Select projects to delete:",
-          choices: config.projects.map((project) => project.repo),
-        },
-      ]);
-
-      if (selectedProjects.length === 0) {
-        log(chalk.yellow("No projects selected for deletion."));
-        return;
-      }
-
-      const { confirmDelete } = await inquirer.prompt([
-        {
-          type: "confirm",
-          name: "confirmDelete",
-          message: `Are you sure you want to delete the selected ${
-            selectedProjects.length > 1 ? "projects" : "project"
-          }?`,
-          default: false,
-        },
-      ]);
-
-      if (confirmDelete) {
-        const spinner = createSpinner("Deleting selected projects...").start();
-        await sleep(1000);
-
-        selectedProjects.forEach((selectedProject) => {
-          const project = config.projects.find(
-            (p) => p.repo === selectedProject
-          );
-          if (project) {
-            const repoPath = `${projectsDir}/${project.repo}`;
-
-            // Stop and delete the project from PM2 if it exists if not skip
-            try {
-              execSync(`pm2 stop ${project.repo}`, { stdio: "ignore" });
-              execSync(`pm2 delete ${project.repo}`, { stdio: "ignore" });
-            } catch (error) {
-              log(
-                chalk.yellow(
-                  `Project ${project.repo} is not running on PM2. Skipping...`
-                )
-              );
-            }
-
-            // Remove the project directory
-            execSync(`rm -rf ${repoPath}`);
-
-            log(
-              chalk.green(`\n✔ Project ${project.repo} deleted successfully.`)
-            );
-          }
-        });
-
-        spinner.success({
-          text: `Deleted ${selectedProjects.length} ${
-            selectedProjects.length > 1 ? "projects" : "project"
-          } successfully.`,
-        });
-
-        // Remove the project from the configuration file
-        const selectedProjectPIDs = config.projects
-          .filter((project) => selectedProjects.includes(project.repo))
-          .map((project) => project.pid);
-
-        if (config.domains && config.domains.length > 0) {
-          config.domains = config.domains.filter(
-            (domain) => !selectedProjectPIDs.includes(domain.pid)
-          );
-        }
-
-        // delete the nginx config file and restart nginx
-        const nginxConfigPath = "/etc/nginx/sites-available";
-        const nginxSymlinkPath = "/etc/nginx/sites-enabled";
-
-        selectedProjects.forEach((selectedProject) => {
-          const project = config.projects.find(
-            (p) => p.repo === selectedProject
-          );
-
-          if (project) {
-            if (config.domains && config.domains.length > 0) {
-              const domain = config.domains.find((d) => d.pid === project.pid);
-              if (domain) {
-                const nginxConfigFile = `${nginxConfigPath}/${domain.domain}`;
-                const nginxSymlinkFile = `${nginxSymlinkPath}/${domain.domain}`;
-
-                if (fs.existsSync(nginxConfigFile)) {
-                  execSync(`sudo rm -f ${nginxConfigFile}`, {
-                    stdio: "inherit",
-                  });
-                }
-
-                if (fs.existsSync(nginxSymlinkFile)) {
-                  execSync(`sudo rm -f ${nginxSymlinkFile}`, {
-                    stdio: "inherit",
-                  });
-                }
-              }
-            }
-          }
-        });
-
-        execSync(`sudo service nginx restart`, { stdio: "inherit" });
-
-        // update config file
-        config.projects = config.projects.filter(
-          (project) => !selectedProjects.includes(project.repo)
-        );
-
-        saveConfig(config);
-
-        // Remove project directories that are not listed in the config file
-        const configRepos = new Set(config.projects.map((p) => p.repo));
-        const projectFolders = fs.readdirSync(projectsDir);
-
-        projectFolders.forEach((folder) => {
-          if (!configRepos.has(folder)) {
-            const folderPath = path.join(projectsDir, folder);
-            execSync(`rm -rf ${folderPath}`);
-            log(chalk.yellow(`Removed untracked folder: ${folder}`));
-          }
-        });
-      } else {
-        log(chalk.yellow("Project deletion cancelled."));
-      }
-    } catch (error) {
-      console.error(chalk.red(`Error: ${error.message}`));
-    }
-  });
-
+// list all projects
 program
   .command("list")
   .description("List the current configuration and associated PM2 instances")
@@ -754,7 +559,7 @@ program
         chalk.cyan.bold("Port"),
         chalk.cyan.bold("PM2 Status"),
         chalk.cyan.bold("Domains"),
-        chalk.cyan.bold("Created At"),
+        chalk.cyan.bold("Last updated"),
       ],
       style: {
         head: ["cyan", "bold"],
@@ -793,18 +598,18 @@ program
         pm2Status === "online" ? chalk.green(pm2Status) : chalk.red(pm2Status),
         chalk.white(projectDomains),
         chalk.white(
-          formatDistanceToNow(new Date(project.created_at), {
+          formatDistanceToNow(new Date(project.last_updated), {
             addSuffix: true,
           })
         ),
       ]);
     });
 
-    log(chalk.green("\nCurrent Configuration:"));
+    log(chalk.green("\nProjects:"));
     log(table.toString());
   });
 
-// start / stop / restart projects (pm2 wrapper)
+// start / stop / restart projects (pm2 wrapper) also delete projects
 program
   .command("manage")
   .description("Start, stop, or restart a project")
@@ -814,6 +619,9 @@ program
         log(chalk.red("No projects found to manage."));
         return;
       }
+
+      // run list command to show active projects
+      execSync("quicky list", { stdio: "inherit" });
 
       const { selectedProject, action } = await inquirer.prompt([
         {
@@ -826,7 +634,7 @@ program
           type: "list",
           name: "action",
           message: "What action would you like to perform?",
-          choices: ["start", "stop", "restart"],
+          choices: ["start", "stop", "restart", "update", "delete"],
         },
       ]);
 
@@ -837,17 +645,164 @@ program
         return;
       }
 
-      const pm2Command = `pm2 ${action} ${project.repo}`;
+      if (action === "update") {
+        // Update a running project with the latest changes from the GitHub repository
+        try {
+          const git = simpleGit();
+          const repoPath = `${projectsDir}/${project.repo}`;
+          const tempPath = `${tempDir}/${project.repo}`;
 
-      try {
-        execSync(pm2Command, { stdio: "inherit" });
-        log(chalk.green(`Project ${project.repo} ${action}ed successfully.`));
-      } catch (error) {
-        console.error(
-          chalk.red(
-            `Failed to ${action} project ${project.repo}: ${error.message}`
-          )
-        );
+          const spinner = createSpinner("Updating the project...").start();
+          await sleep(1000);
+
+          try {
+            // Clone into temporary directory
+            spinner.update({ text: "Cloning the repository..." });
+            await git.clone(
+              `https://github.com/${project.owner}/${project.repo}.git`,
+              tempPath
+            );
+
+            spinner.update({ text: "Copying files to project directory..." });
+            execSync(`cp -r ${tempPath}/* ${repoPath}`, {
+              stdio: "inherit",
+            });
+
+            await sleep(1000);
+            spinner.update({ text: "Cleaning up temporary files..." });
+            execSync(`rm -rf ${tempPath}`);
+
+            await sleep(1000);
+            spinner.update({ text: "Restarting the project..." });
+            execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
+              stdio: "inherit",
+            });
+
+            await sleep(1000);
+
+            // Update the last_updated timestamp
+            project.last_updated = new Date().toISOString();
+
+            saveConfig(config);
+
+            spinner.success({
+              text: `Project ${chalk.green.bold(
+                project.repo
+              )} updated successfully.`,
+            });
+          } catch (error) {
+            spinner.error({
+              text: `Failed to update project: ${error.message}`,
+            });
+          }
+
+          process.exit(0);
+        } catch (error) {
+          console.error(chalk.red(`Error: ${error.message}`));
+        }
+      } else if (action === "delete") {
+        try {
+          if (!config.projects.length) {
+            log(chalk.yellowBright("No projects found to delete."));
+            return;
+          }
+
+          const { confirmDelete } = await inquirer.prompt([
+            {
+              type: "confirm",
+              name: "confirmDelete",
+              message: `Are you sure you want to delete the project ${chalk.redBright(
+                selectedProject
+              )}?`,
+              default: false,
+            },
+          ]);
+
+          if (confirmDelete) {
+            const spinner = createSpinner("Deleting the project...").start();
+            await sleep(1000);
+
+            const project = config.projects.find(
+              (p) => p.repo === selectedProject
+            );
+            if (project) {
+              const repoPath = `${projectsDir}/${project.repo}`;
+
+              // Stop and delete the project from PM2 if it exists
+              try {
+                execSync(`pm2 stop ${project.repo}`, { stdio: "ignore" });
+                execSync(`pm2 delete ${project.repo}`, { stdio: "ignore" });
+              } catch (error) {
+                log(
+                  chalk.yellow(
+                    `\nProject ${project.repo} is not running on PM2. Skipping...`
+                  )
+                );
+              }
+
+              // Remove the project directory
+              execSync(`rm -rf ${repoPath}`);
+
+              log(
+                chalk.green(`\n✔ Project ${project.repo} deleted successfully.`)
+              );
+
+              // Remove the project from the configuration file
+              config.projects = config.projects.filter(
+                (p) => p.repo !== selectedProject
+              );
+
+              // Remove associated domains
+              if (config.domains && config.domains.length > 0) {
+                config.domains = config.domains.filter(
+                  (domain) => domain.pid !== project.pid
+                );
+              }
+
+              // Delete the nginx config file and restart nginx
+              const nginxConfigFile = `/etc/nginx/sites-available/${selectedProject}`;
+              const nginxSymlinkFile = `/etc/nginx/sites-enabled/${selectedProject}`;
+
+              if (fs.existsSync(nginxConfigFile)) {
+                execSync(`sudo rm -f ${nginxConfigFile}`, { stdio: "inherit" });
+              }
+
+              if (fs.existsSync(nginxSymlinkFile)) {
+                execSync(`sudo rm -f ${nginxSymlinkFile}`, {
+                  stdio: "inherit",
+                });
+              }
+
+              execSync(`sudo service nginx restart`, { stdio: "inherit" });
+
+              saveConfig(config);
+            }
+
+            spinner.success({
+              text: `Project ${selectedProject} deleted successfully.`,
+            });
+
+            process.exit(0);
+          } else {
+            log(chalk.yellow("Project deletion cancelled."));
+            process.exit(0);
+          }
+        } catch (error) {
+          console.error(chalk.red(`Error: ${error.message}`));
+        }
+      } else {
+        const pm2Command = `pm2 ${action} ${project.repo}`;
+
+        try {
+          execSync(pm2Command, { stdio: "inherit" });
+          log(chalk.green(`Project ${project.repo} ${action}ed successfully.`));
+        } catch (error) {
+          console.error(
+            chalk.red(
+              `Failed to ${action} project ${project.repo}: ${error.message}`
+            )
+          );
+        }
       }
     } catch (error) {
       console.error(chalk.red(`Error: ${error.message}`));
