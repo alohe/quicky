@@ -676,7 +676,22 @@ program
             execSync(`rm -rf ${tempPath}`);
 
             await sleep(1000);
-            spinner.update({ text: "Restarting the project..." });
+            spinner.update({ text: " Installing dependencies..." });
+            const packageManager = config.packageManager || "npm";
+            const installCommand = packageManager === "bun" ? "bun install" : "npm install";
+            execSync(`cd ${repoPath} && ${installCommand}`, {
+              stdio: "inherit",
+            });
+
+            await sleep(1000);
+            spinner.update({ text: " Building the project..." });
+            const buildCommand = packageManager === "bun" ? "bun run build" : "npm run build";
+            execSync(`cd ${repoPath} && ${buildCommand}`, {
+              stdio: "inherit",
+            });
+
+            await sleep(1000);
+            spinner.update({ text: " Restarting the project..." });
             execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
               stdio: "inherit",
             });
@@ -689,7 +704,7 @@ program
             saveConfig(config);
 
             spinner.success({
-              text: `Project ${chalk.green.bold(
+              text: ` Project ${chalk.green.bold(
                 project.repo
               )} updated successfully.`,
             });
