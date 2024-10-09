@@ -38,10 +38,12 @@ async function checkForUpdates() {
   }
 }
 
-// Check for updates
-if (!process.argv.includes("upgrade")) {
-  checkForUpdates();
-}
+// Check for updates after the command is finished
+program.hook('postAction', async () => {
+  if (!process.argv.includes("upgrade")) {
+    await checkForUpdates();
+  }
+});
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = console.log;
