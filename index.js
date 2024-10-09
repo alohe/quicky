@@ -677,19 +677,21 @@ program
           );
 
           if (project) {
-            const domain = config.domains.find((d) => d.pid === project.pid);
-            if (domain) {
-              const nginxConfigFile = `${nginxConfigPath}/${domain.domain}`;
-              const nginxSymlinkFile = `${nginxSymlinkPath}/${domain.domain}`;
+            if (config.domains && config.domains.length > 0) {
+              const domain = config.domains.find((d) => d.pid === project.pid);
+              if (domain) {
+                const nginxConfigFile = `${nginxConfigPath}/${domain.domain}`;
+                const nginxSymlinkFile = `${nginxSymlinkPath}/${domain.domain}`;
 
-              if (fs.existsSync(nginxConfigFile)) {
-                execSync(`sudo rm -f ${nginxConfigFile}`, { stdio: "inherit" });
-              }
+                if (fs.existsSync(nginxConfigFile)) {
+                  execSync(`sudo rm -f ${nginxConfigFile}`, { stdio: "inherit" });
+                }
 
-              if (fs.existsSync(nginxSymlinkFile)) {
-                execSync(`sudo rm -f ${nginxSymlinkFile}`, {
-                  stdio: "inherit",
-                });
+                if (fs.existsSync(nginxSymlinkFile)) {
+                  execSync(`sudo rm -f ${nginxSymlinkFile}`, {
+                    stdio: "inherit",
+                  });
+                }
               }
             }
           }
