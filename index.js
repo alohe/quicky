@@ -24,8 +24,6 @@ const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
 async function checkForUpdates() {
   try {
     const latest = await latestVersion("quicky"); // Replace 'quicky' with your package name
-    console.log(latest)
-    console.log(packageJson.version)
     if (semver.gt(latest, packageJson.version)) {
       console.log(
         `\n🚀 A new version of Quicky (v${chalk.bold(
