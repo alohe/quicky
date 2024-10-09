@@ -658,8 +658,11 @@ program
           try {
             // Clone into temporary directory
             spinner.update({ text: "Cloning the repository..." });
+            // Ensure the tempPath directory exists
+            fs.ensureDirSync(tempPath);
+
             await git.clone(
-              `https://github.com/${project.owner}/${project.repo}.git`,
+              `https://${config.github.access_token}@github.com/${project.owner}/${project.repo}.git`,
               tempPath
             );
 
