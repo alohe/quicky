@@ -697,7 +697,11 @@ program
         pm2Status = "Error";
       }
 
-      const domains = project.domains ? project.domains.join(", ") : "None";
+      const projectDomains =
+        config.domains
+          .filter((d) => d.pid === project.pid)
+          .map((d) => d.domain)
+          .join(", ") || "None";
 
       table.push([
         chalk.white(index + 1),
@@ -706,7 +710,7 @@ program
         chalk.white(project.repo),
         chalk.greenBright.bold(project.port),
         pm2Status === "online" ? chalk.green(pm2Status) : chalk.red(pm2Status),
-        chalk.white(domains),
+        chalk.white(projectDomains),
         chalk.white(
           formatDistanceToNow(new Date(project.created_at), {
             addSuffix: true,
@@ -803,11 +807,7 @@ program
           type: "list",
           name: "action",
           message: "What would you like to do?",
-          choices: [
-            "Add Domain",
-            "List Domains",
-            "Remove Domain",
-          ],
+          choices: ["Add Domain", "List Domains", "Remove Domain"],
         },
       ]);
 
@@ -977,7 +977,9 @@ async function handleRemoveDomain(projects) {
       return;
     }
 
-    const projectDomains = config.domains.filter((d) => d.pid === selectedProject.pid);
+    const projectDomains = config.domains.filter(
+      (d) => d.pid === selectedProject.pid
+    );
     if (projectDomains.length === 0) {
       log(chalk.red("Error: Selected project has no associated domains."));
       return;
@@ -1042,7 +1044,9 @@ async function handleListDomains(projects) {
     });
 
     projects.forEach((project) => {
-      const projectDomains = config.domains.filter((d) => d.pid === project.pid);
+      const projectDomains = config.domains.filter(
+        (d) => d.pid === project.pid
+      );
       projectDomains.forEach((domain) => {
         table.push([
           chalk.white(project.repo),

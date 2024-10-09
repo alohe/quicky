@@ -4,11 +4,11 @@ A CLI tool for effortless Next.js deployment and management. Initialize, deploy 
 
 ## Features
 
-- 🐙 **GitHub Integration**: Initialize, deploy, and manage Next.js projects directly from GitHub repositories.
+- 🐙 **GitHub Integration**: Initialize, deploy, and manage Next.js projects from private and public GitHub repositories.
 - ⚙️ **Process Management**: Leverage PM2 for application lifecycle and monitoring.
 - 🔄 **Project Maintenance**: Easily update or remove deployed projects.
-- 🌐 **Domain & SSL Automation**: Configure Nginx for custom domains and SSL certificates.
-- 📋 **Configuration Overview**: List and inspect details of all deployed projects.
+- 🌐 **Domain & SSL Automation**: Automatically configure Nginx for custom domains and SSL certificates.
+- 📋 **Configuration Overview**: List and inspect details of all deployed projects and their domains.
 
 ## Prerequisites
 
@@ -26,6 +26,8 @@ You can install Quicky globally using npm:
 ```bash
 sudo npm install -g quicky
 ```
+
+**Note**: Using `sudo` is required to install Quicky globally and to avoid permission issues while configuring Nginx.
 
 ## Usage
 
@@ -45,9 +47,7 @@ quicky deploy
 
 Prompts you to enter your GitHub username or organization name, repository name, and the port number for deployment.
 
-### 3. Add Environment Variables
-
-During deployment, you’ll be asked if you want to add environment variables to your project.
+**Environment Variables** - During deployment, you’ll be asked if you want to add environment variables to your project or not.
 
 ### 4. Manage Projects
 
