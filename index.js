@@ -14,19 +14,19 @@ import { v4 as uuidv4 } from "uuid";
 import { formatDistanceToNow } from "date-fns";
 import latestVersion from "latest-version";
 import semver from "semver";
-import { fileURLToPath } from 'url';
+import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const packagePath = path.resolve(__dirname, 'package.json');
+const packagePath = path.resolve(__dirname, "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
 
 async function checkForUpdates() {
   try {
-    const latest = await latestVersion("quicky"); // Replace 'quicky' with your package name
+    const latest = await latestVersion("quicky");
     if (semver.gt(latest, packageJson.version)) {
       console.log(
-        `\n🚀 A new version of Quicky (v${chalk.bold(
+        `\n🚀 A new version of Quicky (v${chalk.bold.blue(
           latest
         )}) is available! Run ${chalk.green.bold(
           "quicky upgrade"
@@ -38,7 +38,7 @@ async function checkForUpdates() {
   }
 }
 
-// Call the function at the start of your CLI
+// Check for updates
 checkForUpdates();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -454,8 +454,10 @@ program
       }
 
       const packageManager = config.packageManager || "npm";
-      const installCommand = packageManager === "bun" ? "bun install" : "npm install";
-      const buildCommand = packageManager === "bun" ? "bun run build" : "npm run build";
+      const installCommand =
+        packageManager === "bun" ? "bun install" : "npm install";
+      const buildCommand =
+        packageManager === "bun" ? "bun run build" : "npm run build";
       const startCommand = `pm2 start npm --name "${repo}" -- start -- --port ${port}`;
 
       // Install dependencies and build the project
@@ -627,8 +629,7 @@ program
           } successfully.`,
         });
 
-        // check if project has domains and remove them
-        // so domains is gonna be an array of objects with pid, domain, isDefault
+        // Remove the project from the configuration file
         const selectedProjectPIDs = config.projects
           .filter((project) => selectedProjects.includes(project.repo))
           .map((project) => project.pid);
@@ -835,6 +836,9 @@ program
       // Read project list to get a list of existing projects and their ports.
       const projects = config.projects;
 
+      // Show a list of projects and their associated domains
+      await handleListDomains(projects);
+
       if (projects.length === 0) {
         log(chalk.yellow("No projects found. Please deploy a project first."));
         return;
@@ -845,7 +849,7 @@ program
           type: "list",
           name: "action",
           message: "What would you like to do?",
-          choices: ["Add Domain", "List Domains", "Remove Domain"],
+          choices: ["Add Domain", "Remove Domain"],
         },
       ]);
 
@@ -853,8 +857,6 @@ program
         await handleAddDomain(projects);
       } else if (action === "Remove Domain") {
         await handleRemoveDomain(projects);
-      } else if (action === "List Domains") {
-        await handleListDomains(projects);
       }
     } catch (error) {
       console.error(chalk.red(`Error: ${error.message}`));
@@ -1115,7 +1117,7 @@ async function handleListDomains(projects) {
       });
     });
 
-    log(chalk.green("\nDomains Configuration:"));
+    log(chalk.green.bold("\nDomains Configuration:"));
     log(table.toString());
   } catch (error) {
     console.error(chalk.red(`Failed to list domains: ${error.message}`));
