@@ -87,16 +87,8 @@ quicky domains
 
 Allows you to **add** and **remove** domains and subdomains for your projects effortlessly. Handles Nginx configuration and SSL certificates.
 
-### 6. Custom Scripts
-
-```bash
-quicky run-script <script-name>
-```
-
-Allows you to run custom scripts defined in your project configuration before or after deployment.
-
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-Feel free to reach out to me [on 𝕏](https://x.com/alemalohe) if you have any questions or feedback! 
+Feel free to reach out to me on 𝕏 [@alemalohe](https://x.com/alemalohe) if you have any questions or feedback! 
