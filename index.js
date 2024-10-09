@@ -14,11 +14,18 @@ import { v4 as uuidv4 } from "uuid";
 import { formatDistanceToNow } from "date-fns";
 import latestVersion from "latest-version";
 import semver from "semver";
-const packageJson = JSON.parse(fs.readFileSync("./package.json", "utf-8"));
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const packagePath = path.resolve(__dirname, 'package.json');
+const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
 
 async function checkForUpdates() {
   try {
     const latest = await latestVersion("quicky"); // Replace 'quicky' with your package name
+    console.log(latest)
+    console.log(packageJson.version)
     if (semver.gt(latest, packageJson.version)) {
       console.log(
         `\n🚀 A new version of Quicky (v${chalk.bold(
