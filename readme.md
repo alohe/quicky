@@ -85,6 +85,13 @@ quicky manage
 
 Prompts you to select a project and choose an action (start, stop, or restart) to manage the project's PM2 instance.
 
+### 7. Update Quicky
+
+```bash
+quicky update
+```
+
+Updates Quicky to the latest version available on npm.
 
 ## License
 
