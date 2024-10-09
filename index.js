@@ -111,7 +111,7 @@ function help() {
   log("For more information, visit https://quicky.dev");
 }
 
-program.version("0.0.8").action(async () => {
+program.version("0.0.9").action(async () => {
   help();
 });
 
