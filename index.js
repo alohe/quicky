@@ -18,6 +18,9 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const program = new Command();
+program.parse(process.argv);
+
 const packagePath = path.resolve(__dirname, "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
 
@@ -39,7 +42,7 @@ async function checkForUpdates() {
 }
 
 // Check for updates after the command is finished
-program.hook('postAction', async () => {
+program.hook("postAction", async () => {
   if (!process.argv.includes("upgrade")) {
     await checkForUpdates();
   }
@@ -93,8 +96,6 @@ const updateProjectsConfig = ({
 
   saveConfig(config);
 };
-
-const program = new Command();
 
 function help() {
   log(
