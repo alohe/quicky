@@ -470,6 +470,8 @@ program
             execSync("curl -fsSL https://bun.sh/install | bash", {
               stdio: "inherit",
             });
+
+            execSync("source ~/.bashrc", { stdio: "inherit" });
           }
         }
       } else {
