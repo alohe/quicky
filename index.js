@@ -19,7 +19,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const program = new Command();
-program.parse(process.argv);
 
 const packagePath = path.resolve(__dirname, "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
