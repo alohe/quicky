@@ -75,7 +75,7 @@ Prompts you to select a project to delete from the configuration and the file sy
 quicky domains
 ```
 
-Allows you to add, update, or remove domains and subdomains for your projects. Handles Nginx configuration and SSL certificates.
+Allows you to **add** and **remove** domains and subdomains for your projects effortlessly. Handles Nginx configuration and SSL certificates.
 
 ### 6. Start, Stop, or Restart Projects
 
