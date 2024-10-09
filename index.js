@@ -12,6 +12,29 @@ import Table from "cli-table3";
 import net from "net";
 import { v4 as uuidv4 } from "uuid";
 import { formatDistanceToNow } from "date-fns";
+import latestVersion from "latest-version";
+import semver from "semver";
+const packageJson = JSON.parse(fs.readFileSync("./package.json", "utf-8"));
+
+async function checkForUpdates() {
+  try {
+    const latest = await latestVersion("quicky"); // Replace 'quicky' with your package name
+    if (semver.gt(latest, packageJson.version)) {
+      console.log(
+        `\n🚀 A new version of Quicky (v${chalk.bold(
+          latest
+        )}) is available! Run ${chalk.green.bold(
+          "quicky upgrade"
+        )} or ${chalk.green.bold("sudo npm install -g quicky")} to update.\n`
+      );
+    }
+  } catch (error) {
+    console.error("Error checking for updates:", error);
+  }
+}
+
+// Call the function at the start of your CLI
+checkForUpdates();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = console.log;
@@ -103,19 +126,30 @@ function help() {
       "domains"
     )}   Manage domains and subdomains for the projects`
   );
-  log(`  ${chalk.blue.bold("upgrade")}   Upgrade the CLI tool to the latest version`);
+  log(
+    `  ${chalk.blue.bold(
+      "upgrade"
+    )}   Upgrade the CLI tool to the latest version`
+  );
   log("");
   log("Options:");
   log("  --help    Display help for the command");
+  log("  -v, --version    Output the current version of Quicky");
   log("");
   log("For more information, visit https://quicky.dev");
 }
 
-program.version("0.0.10").action(async () => {
-  help();
-});
+program
+  .version(
+    `${packageJson.version}`,
+    "-v, --version",
+    "Output the current version of Quicky"
+  )
+  .action(async () => {
+    help();
+  });
 
-program.option("--help", "Display help for the command").action(() => {
+program.option("-h, --help", "Display help for the command").action(() => {
   help();
 });
 

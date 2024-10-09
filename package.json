@@ -1,6 +1,6 @@
 {
   "name": "quicky",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Quicky is a powerful Node.js CLI that makes server management and deployment a breeze. It's a simple and easy-to-use tool that allows you to manage your servers and deploy your projects with ease.",
   "main": "index.js",
   "type": "module",
@@ -23,8 +23,10 @@
     "date-fns": "^4.1.0",
     "fs-extra": "^11.2.0",
     "inquirer": "^12.0.0",
+    "latest-version": "^9.0.0",
     "nanospinner": "^1.1.0",
     "net": "^1.0.2",
+    "semver": "^7.6.3",
     "simple-git": "^3.27.0",
     "uuid": "^10.0.0"
   }
