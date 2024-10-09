@@ -6,11 +6,12 @@ import simpleGit from "simple-git";
 import fs from "fs-extra";
 import chalk from "chalk";
 import { createSpinner } from "nanospinner";
-import chalkAnimation from "chalk-animation";
 import os from "os";
 import path from "path";
 import Table from "cli-table3";
 import net from "net";
+import { v4 as uuidv4 } from "uuid";
+import { formatDistanceToNow } from "date-fns";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = console.log;
@@ -32,17 +33,33 @@ if (!fs.existsSync(configPath)) {
 // Read configuration file once
 const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
 
-const updateConfig = (project) => {
-  const existing = config.projects.find((p) => p.repo === project.repo);
+const saveConfig = (config) => {
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+};
+
+const updateProjectsConfig = ({
+  pid = uuidv4().slice(0, 5),
+  owner,
+  repo,
+  port,
+}) => {
+  const project = {
+    pid,
+    owner,
+    repo,
+    port,
+    created_at: new Date().toISOString(),
+  };
+  const existing = config.projects.find((p) => p.repo === repo);
 
   if (existing) {
-    existing.port = project.port;
-    existing.owner = project.owner;
+    existing.port = port;
+    existing.owner = owner;
   } else {
     config.projects.push(project);
   }
 
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  saveConfig(config);
 };
 
 const program = new Command();
@@ -93,7 +110,7 @@ function help() {
   log("For more information, visit https://quicky.dev");
 }
 
-program.version("0.0.5").action(async () => {
+program.version("0.0.6").action(async () => {
   help();
 });
 
@@ -147,7 +164,7 @@ program
       if (username && token) {
         config.github = { username, access_token: token };
         config.packageManager = packageManager;
-        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        saveConfig(config);
 
         // Check if PM2 is already installed, if not, install it using npm
         try {
@@ -167,6 +184,7 @@ program
             });
           }
         }
+
         log(
           `\n📁 Configuration files are stored at: ${chalk.green(configPath)}`
         );
@@ -265,6 +283,25 @@ program
         process.exit(1);
       }
 
+      const existingProject = config.projects.find((p) => p.repo === repo);
+
+      if (existingProject) {
+        log(
+          chalk.yellowBright(
+            `\nProject ${chalk.bold(
+              repo
+            )} already exists. \nUse the ${chalk.bold(
+              "update"
+            )} command to update the project, the ${chalk.bold(
+              "delete"
+            )} command to delete the project, or the ${chalk.bold(
+              "list"
+            )} command to view all your deployed projects.\n`
+          )
+        );
+        process.exit(1);
+      }
+
       const isPortInUse = (port) => {
         return new Promise((resolve) => {
           const server = net.createServer();
@@ -313,6 +350,7 @@ program
       const git = simpleGit();
       const repoPath = `${projectsDir}/${repo}`;
 
+      // Check if the directory already exists and is not empty
       if (fs.existsSync(repoPath) && fs.readdirSync(repoPath).length > 0) {
         log(
           `⚠️  The directory ${chalk
@@ -345,24 +383,17 @@ program
         repoPath
       );
 
-      updateConfig({ owner, repo, port });
+      let pid = uuidv4().slice(0, 5);
 
-      const packageManager = config.packageManager || "npm";
-      const installCommand =
-        packageManager === "bun" ? "bun install" : "npm install";
-      const buildCommand =
-        packageManager === "bun" ? "bun run build" : "npm run build";
-      const startCommand = `pm2 start npm --name "${repo}" -- start`;
+      pid =
+        config.projects.filter((p) => p.pid === pid).length > 0
+          ? uuidv4().slice(0, 5)
+          : pid;
 
-      execSync(`cd ${projectsDir}/${repo} && ${installCommand}`, {
-        stdio: "inherit",
-      });
+      // Update the configuration file with the new project details
+      updateProjectsConfig({ pid, owner, repo, port });
 
-      execSync(`cd ${projectsDir}/${repo} && ${buildCommand}`, {
-        stdio: "inherit",
-      });
-
-      // Prompt user to paste in the .env file
+      // Prompt user to add a .env file or not
       const { addEnv } = await inquirer.prompt([
         {
           type: "confirm",
@@ -380,6 +411,36 @@ program
           { flag: "wx" }
         );
         execSync(`nano ${envFilePath}`, { stdio: "inherit" });
+      }
+
+      const packageManager = config.packageManager || "npm";
+      const installCommand =
+        packageManager === "bun" ? "bun install" : "npm install";
+      const buildCommand =
+        packageManager === "bun" ? "bun run build" : "npm run build";
+      const startCommand = `pm2 start npm --name "${repo}" -- start`;
+
+      // Install dependencies and build the project
+      try {
+        execSync(`cd ${projectsDir}/${repo} && ${installCommand}`, {
+          stdio: "inherit",
+        });
+      } catch (error) {
+        console.error(
+          chalk.red(`Failed to install dependencies: ${error.message}`)
+        );
+        process.exit(1);
+      }
+
+      try {
+        execSync(`cd ${projectsDir}/${repo} && ${buildCommand}`, {
+          stdio: "inherit",
+        });
+      } catch (error) {
+        console.error(
+          chalk.red(`Failed to build the project: ${error.message}`)
+        );
+        process.exit(1);
       }
 
       try {
@@ -407,7 +468,7 @@ program
     }
   });
 
-// Update project
+// Update a running project with the latest changes from the GitHub repository
 program
   .command("update")
   .description("Update a running project")
@@ -453,7 +514,7 @@ program
     }
   });
 
-// delete a project from the configuration and the file system
+// Delete a project from the configuration and the file system
 program
   .command("delete")
   .description(
@@ -515,19 +576,67 @@ program
 
             // Remove the project directory
             execSync(`rm -rf ${repoPath}`);
-            config.projects = config.projects.filter(
-              (p) => p.repo !== project.repo
-            );
 
-            log(chalk.green(`✔ Project ${project.repo} deleted successfully.`));
+            log(
+              chalk.green(`\n✔ Project ${project.repo} deleted successfully.`)
+            );
           }
         });
 
-        spinner.success({ text: "Selected projects deleted successfully!" });
+        spinner.success({
+          text: `Deleted ${selectedProjects.length} ${
+            selectedProjects.length > 1 ? "projects" : "project"
+          } successfully.`,
+        });
 
-        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        // check if project has domains and remove them
+        // so domains is gonna be an array of objects with pid, domain, isDefault
+        const selectedProjectPIDs = config.projects
+          .filter((project) => selectedProjects.includes(project.repo))
+          .map((project) => project.pid);
 
-        // Remove any repo in the projects folder that's not in the config file
+        config.domains = config.domains.filter(
+          (domain) => !selectedProjectPIDs.includes(domain.pid)
+        );
+
+        // delete the nginx config file and restart nginx
+        const nginxConfigPath = "/etc/nginx/sites-available";
+        const nginxSymlinkPath = "/etc/nginx/sites-enabled";
+
+        selectedProjects.forEach((selectedProject) => {
+          const project = config.projects.find(
+            (p) => p.repo === selectedProject
+          );
+
+          if (project) {
+            const domain = config.domains.find((d) => d.pid === project.pid);
+            if (domain) {
+              const nginxConfigFile = `${nginxConfigPath}/${domain.domain}`;
+              const nginxSymlinkFile = `${nginxSymlinkPath}/${domain.domain}`;
+
+              if (fs.existsSync(nginxConfigFile)) {
+                execSync(`sudo rm -f ${nginxConfigFile}`, { stdio: "inherit" });
+              }
+
+              if (fs.existsSync(nginxSymlinkFile)) {
+                execSync(`sudo rm -f ${nginxSymlinkFile}`, {
+                  stdio: "inherit",
+                });
+              }
+            }
+          }
+        });
+
+        execSync(`sudo service nginx restart`, { stdio: "inherit" });
+
+        // update config file
+        config.projects = config.projects.filter(
+          (project) => !selectedProjects.includes(project.repo)
+        );
+
+        saveConfig(config);
+
+        // Remove project directories that are not listed in the config file
         const configRepos = new Set(config.projects.map((p) => p.repo));
         const projectFolders = fs.readdirSync(projectsDir);
 
@@ -558,16 +667,19 @@ program
     const table = new Table({
       head: [
         chalk.cyan.bold("ID"),
+        chalk.cyan.bold("PID"),
         chalk.cyan.bold("Owner"),
         chalk.cyan.bold("Repository"),
         chalk.cyan.bold("Port"),
         chalk.cyan.bold("PM2 Status"),
+        chalk.cyan.bold("Domains"),
+        chalk.cyan.bold("Created At"),
       ],
       style: {
         head: ["cyan", "bold"],
         border: ["grey"],
       },
-      colWidths: [5, 15, 20, 10, 15],
+      colWidths: [5, 10, 15, 20, 10, 15, 30, 25],
     });
 
     config.projects.forEach((project, index) => {
@@ -585,12 +697,21 @@ program
         pm2Status = "Error";
       }
 
+      const domains = project.domains ? project.domains.join(", ") : "None";
+
       table.push([
         chalk.white(index + 1),
+        chalk.yellow.bold(project.pid),
         chalk.white(project.owner),
         chalk.white(project.repo),
-        chalk.white(project.port),
+        chalk.greenBright.bold(project.port),
         pm2Status === "online" ? chalk.green(pm2Status) : chalk.red(pm2Status),
+        chalk.white(domains),
+        chalk.white(
+          formatDistanceToNow(new Date(project.created_at), {
+            addSuffix: true,
+          })
+        ),
       ]);
     });
 
@@ -598,7 +719,7 @@ program
     log(table.toString());
   });
 
-// start / stop / restart projects
+// start / stop / restart projects (pm2 wrapper)
 program
   .command("manage")
   .description("Start, stop, or restart a project")
@@ -631,26 +752,6 @@ program
         return;
       }
 
-      // Check if the project is linked to any domains
-      const linkedDomains = config.projects
-        .filter((p) => p.repo === selectedProject && p.domain)
-        .map((p) => p.domain);
-
-      if (linkedDomains.length > 0) {
-        log(
-          chalk.green(
-            `Project ${selectedProject} is linked to the following domains:`
-          )
-        );
-        linkedDomains.forEach((domain) => log(chalk.blue(domain)));
-      } else {
-        log(
-          chalk.yellow(
-            `Project ${selectedProject} is not linked to any domains.`
-          )
-        );
-      }
-
       const pm2Command = `pm2 ${action} ${project.repo}`;
 
       try {
@@ -668,7 +769,7 @@ program
     }
   });
 
-// a way to manage domains and subdomains for the projects
+// Manage domains and subdomains for the projects
 program
   .command("domains")
   .description("Manage domains and subdomains for the projects")
@@ -702,7 +803,11 @@ program
           type: "list",
           name: "action",
           message: "What would you like to do?",
-          choices: ["Add Domain", "Remove Domain", "Update Domain"],
+          choices: [
+            "Add Domain",
+            "List Domains",
+            "Remove Domain",
+          ],
         },
       ]);
 
@@ -710,8 +815,8 @@ program
         await handleAddDomain(projects);
       } else if (action === "Remove Domain") {
         await handleRemoveDomain(projects);
-      } else if (action === "Update Domain") {
-        await handleUpdateDomain(projects);
+      } else if (action === "List Domains") {
+        await handleListDomains(projects);
       }
     } catch (error) {
       console.error(chalk.red(`Error: ${error.message}`));
@@ -754,6 +859,15 @@ async function handleAddDomain(projects) {
       return;
     }
 
+    const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
+    const nginxSymlinkPath = `/etc/nginx/sites-enabled/${domain}`;
+
+    // Check if the domain already exists
+    if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
+      log(chalk.red(`Error: Domain ${domain} already exists.`));
+      return;
+    }
+
     let nginxConfig = `
 server {
     server_name ${domain};
@@ -788,8 +902,7 @@ server {
 }`;
     }
 
-    // Write Nginx config to the sites-available folder using shell command
-    const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
+    // Write Nginx config to the sites-available  and sites-enabled directories
     const tempFilePath = `/tmp/${domain}.conf`;
     fs.writeFileSync(tempFilePath, nginxConfig, { mode: 0o644 });
 
@@ -797,10 +910,9 @@ server {
       stdio: "inherit",
     });
 
-    execSync(
-      `sudo ln -s /etc/nginx/sites-available/${domain} /etc/nginx/sites-enabled/`,
-      { stdio: "inherit" }
-    );
+    execSync(`sudo ln -s ${nginxConfigPath} ${nginxSymlinkPath}`, {
+      stdio: "inherit",
+    });
 
     // Restart Nginx to apply the changes
     execSync(`sudo service nginx restart`, { stdio: "inherit" });
@@ -814,76 +926,40 @@ server {
     log(chalk.green(`SSL certificate obtained and configured for ${domain}.`));
 
     // Update the config file with the new domain
-    selectedProject.domain = domain;
-    selectedProject.isDefault = isDefault;
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    const projectPid = selectedProject.pid;
+
+    if (!config.domains) {
+      config.domains = [];
+    }
+
+    if (config.domains.some((d) => d.domain === domain)) {
+      log(chalk.red(`Domain ${domain} already exists.`));
+      return;
+    }
+
+    config.domains.push({ pid: projectPid, domain, isDefault });
+    saveConfig(config);
     log(
-      chalk.green(`Domain ${domain} added successfully to project ${project}.`)
+      chalk.green(
+        `Domain ${domain} added successfully to project ${selectedProject.repo}.`
+      )
+    );
+    log(
+      chalk.green(
+        `You can now access your project at ${
+          isDefault ? "http" : "https"
+        }://${domain}`
+      )
+    );
+    log(
+      `Please make sure your domain is pointing to this server's IP address. It may take up to 48 hours for DNS changes to take effect.`
     );
   } catch (error) {
     console.error(chalk.red(`Failed to add domain: ${error.message}`));
   }
 }
 
-// Function to update an existing domain or its port
-async function handleUpdateDomain(projects) {
-  try {
-    const { project, newDomain, newPort, isDefault } = await inquirer.prompt([
-      {
-        type: "list",
-        name: "project",
-        message: "Select the project you want to update:",
-        choices: projects.filter((p) => p.domain).map((p) => p.repo),
-      },
-      {
-        type: "input",
-        name: "newDomain",
-        message:
-          "Enter the new domain (leave empty to keep the current domain):",
-      },
-      {
-        type: "input",
-        name: "newPort",
-        message: "Enter the new port (leave empty to keep the current port):",
-      },
-      {
-        type: "confirm",
-        name: "isDefault",
-        message: "Is this the default domain (listening on port 80)?",
-        default: false,
-      },
-    ]);
-
-    const selectedProject = projects.find((p) => p.repo === project);
-    if (!selectedProject || !selectedProject.domain) {
-      log(chalk.red("Error: Selected project has no associated domain."));
-      return;
-    }
-
-    const oldDomain = selectedProject.domain;
-    const oldPort = selectedProject.port;
-
-    // Get updated values, falling back to the current values if left empty
-    const updatedDomain = newDomain.trim() || oldDomain;
-    const updatedPort = newPort.trim() || oldPort;
-
-    // Remove old Nginx and SSL configuration if the domain has changed
-    if (oldDomain !== updatedDomain) {
-      await handleRemoveDomain([selectedProject]);
-    }
-
-    // Create new Nginx configuration with the updated domain or port
-    selectedProject.port = updatedPort;
-    selectedProject.isDefault = isDefault;
-    await handleAddDomain([selectedProject]);
-
-    log(chalk.green(`Domain updated successfully for project ${project}.`));
-  } catch (error) {
-    console.error(chalk.red(`Failed to update domain: ${error.message}`));
-  }
-}
-
-// Function to remove a domain or subdomain and delete Nginx and Certbot configuration
+// Function to remove a domain or subdomain and delete Nginx and Certbot configuration files
 async function handleRemoveDomain(projects) {
   try {
     const { project } = await inquirer.prompt([
@@ -891,17 +967,30 @@ async function handleRemoveDomain(projects) {
         type: "list",
         name: "project",
         message: "Select the project you want to remove a domain from:",
-        choices: projects.filter((p) => p.domain).map((p) => p.repo),
+        choices: projects.map((p) => p.repo),
       },
     ]);
 
     const selectedProject = projects.find((p) => p.repo === project);
-    if (!selectedProject || !selectedProject.domain) {
-      log(chalk.red("Error: Selected project has no associated domain."));
+    if (!selectedProject) {
+      log(chalk.red("Error: Selected project not found."));
       return;
     }
 
-    const domain = selectedProject.domain;
+    const projectDomains = config.domains.filter((d) => d.pid === selectedProject.pid);
+    if (projectDomains.length === 0) {
+      log(chalk.red("Error: Selected project has no associated domains."));
+      return;
+    }
+
+    const { domain } = await inquirer.prompt([
+      {
+        type: "list",
+        name: "domain",
+        message: "Select the domain you want to remove:",
+        choices: projectDomains.map((d) => d.domain),
+      },
+    ]);
 
     // Remove Nginx configuration
     const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
@@ -917,10 +1006,9 @@ async function handleRemoveDomain(projects) {
     execSync(certbotCommand, { stdio: "inherit" });
     log(chalk.green(`SSL certificate removed for ${domain}.`));
 
-    // Update the config file and remove the domain from the project
-    delete selectedProject.domain;
-    delete selectedProject.isDefault;
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    // Update the config file and remove the domain from the config
+    config.domains = config.domains.filter((d) => d.domain !== domain);
+    saveConfig(config);
     log(
       chalk.green(
         `Domain ${domain} removed successfully from project ${project}.`
@@ -928,6 +1016,47 @@ async function handleRemoveDomain(projects) {
     );
   } catch (error) {
     console.error(chalk.red(`Failed to remove domain: ${error.message}`));
+  }
+}
+
+// Function to list all domains and their associated projects
+async function handleListDomains(projects) {
+  try {
+    if (projects.length === 0) {
+      log(chalk.yellow("No projects found."));
+      return;
+    }
+
+    const table = new Table({
+      head: [
+        chalk.cyan.bold("Project"),
+        chalk.cyan.bold("Domain"),
+        chalk.cyan.bold("Port"),
+        chalk.cyan.bold("Default"),
+      ],
+      style: {
+        head: ["cyan", "bold"],
+        border: ["grey"],
+      },
+      colWidths: [20, 30, 10, 10],
+    });
+
+    projects.forEach((project) => {
+      const projectDomains = config.domains.filter((d) => d.pid === project.pid);
+      projectDomains.forEach((domain) => {
+        table.push([
+          chalk.white(project.repo),
+          chalk.blue(domain.domain),
+          chalk.white(project.port),
+          domain.isDefault ? chalk.green("Yes") : chalk.red("No"),
+        ]);
+      });
+    });
+
+    log(chalk.green("\nDomains Configuration:"));
+    log(table.toString());
+  } catch (error) {
+    console.error(chalk.red(`Failed to list domains: ${error.message}`));
   }
 }
 
