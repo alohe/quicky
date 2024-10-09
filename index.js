@@ -13,6 +13,8 @@ import net from "net";
 import { v4 as uuidv4 } from "uuid";
 import { formatDistanceToNow } from "date-fns";
 
+
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = console.log;
 const homeDir = os.homedir();
@@ -110,7 +112,7 @@ function help() {
   log("For more information, visit https://quicky.dev");
 }
 
-program.version("0.0.7").action(async () => {
+program.version("0.0.8").action(async () => {
   help();
 });
 
