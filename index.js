@@ -180,7 +180,7 @@ program
           type: "confirm",
           name: "confirmUninstall",
           message:
-            "Are you sure you want to uninstall Quicky? This will stop all PM2 instances, delete Nginx configurations, project files, and all configurations.",
+            "Are you sure you want to uninstall Quicky? This will stop all PM2 instances, delete Nginx configurations, project files, and all configurations stored by Quicky.",
           default: false,
         },
       ]);
