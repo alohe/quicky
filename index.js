@@ -173,12 +173,81 @@ program
 program
   .command("uninstall")
   .description("Uninstall the CLI tool globally")
-  .action(() => {
+  .action(async () => {
     try {
-      execSync("sudo npm uninstall -g quicky", { stdio: "inherit" });
-      log(chalk.green("Quicky has been uninstalled globally."));
+      const { confirmUninstall } = await inquirer.prompt([
+        {
+          type: "confirm",
+          name: "confirmUninstall",
+          message:
+            "Are you sure you want to uninstall Quicky? This will stop all PM2 instances, delete Nginx configurations, project files, and all configurations.",
+          default: false,
+        },
+      ]);
+
+      if (confirmUninstall) {
+        // Stop all PM2 instances
+        try {
+          execSync("pm2 stop all && pm2 delete all", { stdio: "inherit" });
+          log(chalk.green("All PM2 instances have been stopped and deleted."));
+        } catch (error) {
+          log(chalk.red(`Failed to stop PM2 instances: ${error.message}`));
+        }
+
+        // Delete Nginx configurations
+        try {
+          const domains = config.domains || [];
+          domains.forEach((domain) => {
+            const domainConfigPath = `/etc/nginx/sites-available/${domain.domain}`;
+            const domainSymlinkPath = `/etc/nginx/sites-enabled/${domain.domain}`;
+            if (fs.existsSync(domainConfigPath)) {
+              execSync(`sudo rm ${domainConfigPath}`, { stdio: "inherit" });
+            }
+            if (fs.existsSync(domainSymlinkPath)) {
+              execSync(`sudo rm ${domainSymlinkPath}`, { stdio: "inherit" });
+            }
+          });
+          log(
+            chalk.green(
+              "Nginx configurations for all domains have been deleted."
+            )
+          );
+        } catch (error) {
+          log(
+            chalk.red(`Failed to delete Nginx configurations: ${error.message}`)
+          );
+        }
+
+        // Delete project files
+        try {
+          fs.removeSync(projectsDir);
+          log(chalk.green("Project files have been deleted."));
+        } catch (error) {
+          log(chalk.red(`Failed to delete project files: ${error.message}`));
+        }
+
+        // Delete configuration files
+        try {
+          fs.removeSync(defaultFolder);
+          log(chalk.green("Configuration files have been deleted."));
+        } catch (error) {
+          log(
+            chalk.red(`Failed to delete configuration files: ${error.message}`)
+          );
+        }
+
+        // Uninstall the CLI tool
+        try {
+          execSync("sudo npm uninstall -g quicky", { stdio: "inherit" });
+          log(chalk.green("Quicky has been uninstalled globally."));
+        } catch (error) {
+          log(chalk.red(`Failed to uninstall Quicky: ${error.message}`));
+        }
+      } else {
+        log(chalk.yellow("Uninstallation cancelled."));
+      }
     } catch (error) {
-      console.error(chalk.red(`Failed to uninstall Quicky: ${error.message}`));
+      console.error(chalk.red(`Error: ${error.message}`));
     }
   });
 
