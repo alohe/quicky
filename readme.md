@@ -1,5 +1,4 @@
 # Quicky
-
 A CLI tool for effortless Next.js deployment and management. Initialize, deploy from GitHub, update, delete, and manage projects. Handles PM2 instances and domain configuration. Streamlines the entire lifecycle of Next.js applications on remote servers.
 
 ## Features
@@ -87,8 +86,52 @@ quicky domains
 
 Allows you to **add** and **remove** domains and subdomains for your projects effortlessly. Handles Nginx configuration and SSL certificates.
 
+### 6. Install Quicky
+
+```bash
+quicky install
+```
+
+Installs Quicky globally.
+
+### 7. Upgrade Quicky
+
+```bash
+quicky upgrade
+```
+
+Upgrades Quicky to the latest version.
+
+### 8. Uninstall Quicky
+
+```bash
+quicky uninstall
+```
+
+Uninstalls Quicky globally.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgements
+
+- [Inquirer.js](https://www.npmjs.com/package/inquirer) - A collection of common interactive command line user interfaces.
+- [ShellJS](https://www.npmjs.com/package/shelljs) - Portable Unix shell commands for Node.js.
+- [Simple Git](https://www.npmjs.com/package/simple-git) - A light library for executing Git commands in Node.js.
+- [PM2](https://www.npmjs.com/package/pm2) - Production process manager for Node.js applications with a built-in load balancer.
+- [Nginx](https://www.nginx.com/) - A high-performance web server and reverse proxy server.
+- [Certbot](https://certbot.eff.org/) - A free, automated, and open certificate authority for SSL certificates.
+- [Let's Encrypt](https://letsencrypt.org/) - A free, automated, and open certificate authority for SSL certificates.
+
+## Author
+
+- [Alohe](https://github.com/alohe) 
+
+Feel free to reach out to me on 𝕏 [@alemalohe](https://x.com/alemalohe) if you have any questions or feedback! 
+
+## Contributing
+
+Contributions are welcome! Please read the [CONTRIBUTING](CONTRIBUTING.md) file for guidelines on how to get started.
 
 Feel free to reach out to me on 𝕏 [@alemalohe](https://x.com/alemalohe) if you have any questions or feedback! 
