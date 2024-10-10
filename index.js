@@ -1094,27 +1094,27 @@ async function handleAddDomain(projects) {
     // Check if the domain already exists in Nginx configuration
     if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
       // Check if the domain exists in the config.json
-      const domainExistsInConfig = config.domains.some(
-        (d) => d.domain === domain
+      const domainExistsInConfig = (config.domains || []).some(
+      (d) => d.domain === domain
       );
       if (!domainExistsInConfig) {
-        log(
-          chalk.yellow(
-            `Warning: Domain ${domain} configuration files exist but domain is not in config.json.`
-          )
-        );
-        log(`Overriding the existing configuration files for ${domain}.`);
+      log(
+        chalk.yellow(
+        `Warning: Domain ${domain} configuration files exist but domain is not in config.json.`
+        )
+      );
+      log(`Overriding the existing configuration files for ${domain}.`);
       } else {
-        log(chalk.red(`Error: Domain ${domain} already exists.`));
-        log(
-          `Please remove the existing configuration first or choose a different domain.`
-        );
-        log(
-          `You can use the ${chalk.green(
-            "quicky domains"
-          )} command to manage domains.`
-        );
-        return;
+      log(chalk.red(`Error: Domain ${domain} already exists.`));
+      log(
+        `Please remove the existing configuration first or choose a different domain.`
+      );
+      log(
+        `You can use the ${chalk.green(
+        "quicky domains"
+        )} command to manage domains.`
+      );
+      return;
       }
     }
 
