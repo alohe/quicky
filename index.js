@@ -1118,17 +1118,18 @@ async function handleAddDomain(projects) {
       }
     }
 
+    let zoneName = `zone_${uuidv4().slice(0, 5)}`;
     let nginxConfig = `
-  limit_req_zone $binary_remote_addr zone=one:10m rate=10r/s;
+    limit_req_zone $binary_remote_addr zone=${zoneName}:10m rate=10r/s;
 
-  server {
+    server {
     listen 80;
     server_name ${domain};
 
     # Main location block for proxying to the Next.js application
     location / {
       # Enable rate limiting to prevent abuse
-      limit_req zone=one burst=5 nodelay;
+      limit_req zone=${zoneName} burst=5 nodelay;
 
       # Proxy settings for Next.js application
       proxy_pass http://localhost:${selectedProject.port};
@@ -1166,15 +1167,15 @@ async function handleAddDomain(projects) {
     # Logs for debugging and monitoring
     access_log /var/log/nginx/${domain}-access.log;
     error_log /var/log/nginx/${domain}-error.log;
-  }
+    }
 
-  # Additional security headers for best practices
-  add_header X-Content-Type-Options "nosniff";
-  add_header X-Frame-Options "DENY";
-  add_header X-XSS-Protection "1; mode=block";
-  add_header Referrer-Policy "no-referrer-when-downgrade";
-  add_header Content-Security-Policy "default-src 'self'; img-src *; media-src * data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:";
-  `;
+    # Additional security headers for best practices
+    add_header X-Content-Type-Options "nosniff";
+    add_header X-Frame-Options "DENY";
+    add_header X-XSS-Protection "1; mode=block";
+    add_header Referrer-Policy "no-referrer-when-downgrade";
+    add_header Content-Security-Policy "default-src 'self'; img-src *; media-src * data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:";
+    `;
 
     // Write Nginx config to the sites-available  and sites-enabled directories
     const tempFilePath = `/tmp/${domain}.conf`;
@@ -1328,13 +1329,12 @@ async function handleListDomains(projects) {
         chalk.cyan.bold("Project"),
         chalk.cyan.bold("Domain"),
         chalk.cyan.bold("Port"),
-        chalk.cyan.bold("Default"),
       ],
       style: {
         head: ["cyan", "bold"],
         border: ["grey"],
       },
-      colWidths: [20, 30, 10, 10],
+      colWidths: [20, 30, 10],
     });
 
     projects.forEach((project) => {
