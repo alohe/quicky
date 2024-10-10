@@ -1352,23 +1352,36 @@ program
   .description("Upgrade the CLI to the latest version")
   .action(() => {
     try {
-      // Install the latest version of quicky globally
+      // Get the currently installed version
+      const currentVersion = execSync("npm list -g quicky --depth=0", {
+        encoding: "utf-8",
+      })
+        .match(/quicky@([\d.]+)/)[1];
+
+      // Get the latest version available in the npm registry
+      const latestVersion = execSync("npm show quicky version", {
+        encoding: "utf-8",
+      }).trim();
+
+      if (currentVersion === latestVersion) {
+        console.log(
+          chalk.yellow(`Quicky CLI is already at the latest version (${currentVersion}).`)
+        );
+        return;
+      }
+
+      // Proceed to upgrade
       console.log(chalk.blue("Upgrading Quicky CLI to the latest version..."));
       execSync("sudo npm install -g quicky", { stdio: "inherit" });
 
-      // Check and display the updated version
-      const newVersion = execSync("npm show quicky version", {
-        encoding: "utf-8",
-      }).trim();
       console.log(
-        chalk.green(
-          `Quicky CLI upgraded successfully to version ${newVersion}.`
-        )
+        chalk.green(`Quicky CLI upgraded successfully to version ${latestVersion}.`)
       );
     } catch (error) {
       console.error(chalk.red(`Failed to upgrade the CLI: ${error.message}`));
     }
   });
+
 
 // Global error handling
 process.on("unhandledRejection", (reason, promise) => {
