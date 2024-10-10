@@ -1095,26 +1095,26 @@ async function handleAddDomain(projects) {
     if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
       // Check if the domain exists in the config.json
       const domainExistsInConfig = (config.domains || []).some(
-      (d) => d.domain === domain
+        (d) => d.domain === domain
       );
       if (!domainExistsInConfig) {
-      log(
-        chalk.yellow(
-        `Warning: Domain ${domain} configuration files exist but domain is not in config.json.`
-        )
-      );
-      log(`Overriding the existing configuration files for ${domain}.`);
+        log(
+          chalk.yellow(
+            `Warning: Domain ${domain} configuration files exist but domain is not in config.json.`
+          )
+        );
+        log(`Overriding the existing configuration files for ${domain}.`);
       } else {
-      log(chalk.red(`Error: Domain ${domain} already exists.`));
-      log(
-        `Please remove the existing configuration first or choose a different domain.`
-      );
-      log(
-        `You can use the ${chalk.green(
-        "quicky domains"
-        )} command to manage domains.`
-      );
-      return;
+        log(chalk.red(`Error: Domain ${domain} already exists.`));
+        log(
+          `Please remove the existing configuration first or choose a different domain.`
+        );
+        log(
+          `You can use the ${chalk.green(
+            "quicky domains"
+          )} command to manage domains.`
+        );
+        return;
       }
     }
 
@@ -1161,13 +1161,6 @@ async function handleAddDomain(projects) {
 
       # Handle large request bodies if needed
       client_max_body_size 50M;
-    }
-
-    # Serve static assets with caching (adjust the pattern if needed)
-    location ~* \.(ico|css|js|gif|jpe?g|png|woff2?|ttf|svg|eot)$ {
-      expires 30d;
-      add_header Cache-Control "public, no-transform";
-      try_files $uri $uri/ =404;
     }
 
     # Logs for debugging and monitoring
