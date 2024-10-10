@@ -1178,10 +1178,15 @@ async function handleAddDomain(projects) {
       stdio: "inherit",
     });
 
-    // Create a symlink to the sites-enabled directory
-    execSync(`sudo ln -s ${nginxConfigPath} ${nginxSymlinkPath}`, {
+    // Check if the symlink already exists
+    if (!fs.existsSync(nginxSymlinkPath)) {
+      // Create a symlink to the sites-enabled directory
+      execSync(`sudo ln -s ${nginxConfigPath} ${nginxSymlinkPath}`, {
       stdio: "inherit",
-    });
+      });
+    } else {
+      log(chalk.yellow(`Symlink already exists for ${domain}.`));
+    }
 
     // Restart Nginx to apply the changes
     execSync(`sudo service nginx restart`, { stdio: "inherit" });
