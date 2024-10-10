@@ -175,12 +175,13 @@ program
   .description("Uninstall the CLI tool globally")
   .action(async () => {
     try {
+      log(chalk.red.bold("\n⚠️  WARNING: This action is irreversible!"));
+      log(chalk.red.bold("All projects and configurations will be permanently deleted."));
       const { confirmUninstall } = await inquirer.prompt([
         {
           type: "confirm",
           name: "confirmUninstall",
-          message:
-            "Are you sure you want to uninstall Quicky? This will stop all PM2 instances, delete Nginx configurations, project files, and all configurations stored by Quicky.",
+          message: `Are you sure you want to uninstall Quicky?`,
           default: false,
         },
       ]);
@@ -671,7 +672,9 @@ program
 // list all projects and domains
 program
   .command("list")
-  .description("List the current configuration, associated PM2 instances, and domains")
+  .description(
+    "List the current configuration, associated PM2 instances, and domains"
+  )
   .action(() => {
     if (config.projects.length === 0) {
       log(chalk.yellow("No projects found."));
