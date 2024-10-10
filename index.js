@@ -171,6 +171,18 @@ program
   });
 
 program
+  .command("uninstall")
+  .description("Uninstall the CLI tool globally")
+  .action(() => {
+    try {
+      execSync("sudo npm uninstall -g quicky", { stdio: "inherit" });
+      log(chalk.green("Quicky has been uninstalled globally."));
+    } catch (error) {
+      console.error(chalk.red(`Failed to uninstall Quicky: ${error.message}`));
+    }
+  });
+
+program
   .command("init")
   .description("Save your GitHub account details and install dependencies")
   .option("--username <username>", "GitHub username")
