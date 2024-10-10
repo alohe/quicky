@@ -668,10 +668,10 @@ program
     }
   });
 
-// list all projects
+// list all projects and domains
 program
   .command("list")
-  .description("List the current configuration and associated PM2 instances")
+  .description("List the current configuration, associated PM2 instances, and domains")
   .action(() => {
     if (config.projects.length === 0) {
       log(chalk.yellow("No projects found."));
@@ -680,23 +680,22 @@ program
 
     const table = new Table({
       head: [
-        chalk.cyan.bold("ID"),
         chalk.cyan.bold("PID"),
         chalk.cyan.bold("Owner"),
         chalk.cyan.bold("Repository"),
         chalk.cyan.bold("Port"),
         chalk.cyan.bold("PM2 Status"),
-        chalk.cyan.bold("Domains"),
         chalk.cyan.bold("Last updated"),
+        chalk.cyan.bold("Domains"),
       ],
       style: {
         head: ["cyan", "bold"],
-        border: ["grey"],
       },
-      colWidths: [5, 10, 15, 20, 10, 15, 30, 25],
+      wordWrap: true,
+      colWidths: [10, 15, 15, 10, 15, 20, 30],
     });
 
-    config.projects.forEach((project, index) => {
+    config.projects.forEach((project) => {
       let pm2Status = "Not Running";
       try {
         const pm2List = execSync(`pm2 jlist`, { encoding: "utf-8" });
@@ -711,30 +710,31 @@ program
         pm2Status = "Error";
       }
 
-      const projectDomains =
-        config.domains
-          .filter((d) => d.pid === project.pid)
-          .map((d) => d.domain)
-          .join(", ") || "None";
+      const domains = (config.domains || [])
+        .filter((domain) => domain.project === project.repo)
+        .map((domain) => domain.name)
+        .join(", ");
 
       table.push([
-        chalk.white(index + 1),
         chalk.yellow.bold(project.pid),
         chalk.white(project.owner),
         chalk.white(project.repo),
         chalk.greenBright.bold(project.port),
         pm2Status === "online" ? chalk.green(pm2Status) : chalk.red(pm2Status),
-        chalk.white(projectDomains),
         chalk.white(
           formatDistanceToNow(new Date(project.last_updated), {
             addSuffix: true,
           })
         ),
+        domains ? chalk.white(domains) : chalk.gray("No domains"),
       ]);
     });
 
     log(chalk.green("\nProjects:"));
     log(table.toString());
+
+    log(chalk.green("\nTo manage a project, use the 'quicky manage' command."));
+    log(chalk.green("For more details, visit https://quicky.dev\n"));
   });
 
 // start / stop / restart projects (pm2 wrapper) also delete projects
