@@ -97,8 +97,15 @@ const updateProjectsConfig = ({
 };
 
 function help() {
+  const rabbit = `
+ (\\(\\ 
+ ( -.-)
+ o_(")(")
+`;
+
+  log(chalk.blue(rabbit)); // Change color to whatever fits your style
   log(
-    `${chalk.hex("#fe64fa").bold("Quicky")}${chalk.hex("#ffacfd")(
+    `${chalk.hex("#fd6d4c").bold("Quicky")}${chalk.hex("#f39549")(
       " - A CLI tool to deploy Next.js projects"
     )}`
   );
@@ -113,9 +120,11 @@ function help() {
   log("");
   log("Commands:");
   log(
-    `  ${chalk.blue.bold(
-      "init"
-    )}      Save your GitHub account details and install dependencies\n`
+    `  ${chalk
+      .hex("#cea9fe")
+      .bold(
+        "init"
+      )}      Save your GitHub account details and install dependencies\n`
   );
   log(`  ${chalk.blue.bold("deploy")}    Deploy a Next.js project from GitHub`);
   log(
@@ -129,13 +138,22 @@ function help() {
     )}    Start, stop, restart, update, or delete a project \n`
   );
   log(
-    `  ${chalk.blue.bold(
+    `  ${chalk.cyanBright.bold(
       "domains"
     )}   Manage domains and subdomains for the projects`
   );
-  log(`  ${chalk.blue.bold("install")}   Install quicky globally`);
-  log(`  ${chalk.blue.bold("upgrade")}   Upgrade quicky to the latest version`);
-  log(`  ${chalk.blue.bold("uninstall")} Uninstall the CLI tool globally`);
+  log("");
+  log(`  ${chalk.hex("#fe64fa").bold("install")}   Install quicky globally`);
+  log(
+    `  ${chalk
+      .hex("#fe64fa")
+      .bold("upgrade")}   Upgrade quicky to the latest version`
+  );
+  log(
+    `  ${chalk
+      .hex("#fe64fa")
+      .bold("uninstall")} Uninstall the CLI tool globally`
+  );
   log("");
   log("Options:");
   log("  --help    Display help for the command");
@@ -176,7 +194,11 @@ program
   .action(async () => {
     try {
       log(chalk.red.bold("\n⚠️  WARNING: This action is irreversible!"));
-      log(chalk.red.bold("All projects and configurations will be permanently deleted."));
+      log(
+        chalk.red.bold(
+          "All projects and configurations will be permanently deleted."
+        )
+      );
       const { confirmUninstall } = await inquirer.prompt([
         {
           type: "confirm",
