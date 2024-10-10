@@ -1220,10 +1220,19 @@ async function handleAddDomain(projects) {
     }
 
     // Obtain SSL certificate using Certbot
-    execSync(
-      `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${config.email}`,
-      { stdio: "inherit" }
-    );
+    try {
+      execSync("certbot --version", { stdio: "ignore" });
+    } catch (error) {
+      execSync("sudo apt install certbot python3-certbot-nginx -y", {
+        stdio: "inherit",
+      });
+    } finally {
+      execSync(
+        `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${config.email}`,
+        { stdio: "inherit" }
+      );
+    }
+
     log(chalk.green(`SSL certificate obtained and configured for ${domain}.`));
 
     // Update the config file with the new domain
