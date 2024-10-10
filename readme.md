@@ -114,19 +114,9 @@ Uninstalls Quicky globally.
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Acknowledgements
-
-- [Inquirer.js](https://www.npmjs.com/package/inquirer) - A collection of common interactive command line user interfaces.
-- [ShellJS](https://www.npmjs.com/package/shelljs) - Portable Unix shell commands for Node.js.
-- [Simple Git](https://www.npmjs.com/package/simple-git) - A light library for executing Git commands in Node.js.
-- [PM2](https://www.npmjs.com/package/pm2) - Production process manager for Node.js applications with a built-in load balancer.
-- [Nginx](https://www.nginx.com/) - A high-performance web server and reverse proxy server.
-- [Certbot](https://certbot.eff.org/) - A free, automated, and open certificate authority for SSL certificates.
-- [Let's Encrypt](https://letsencrypt.org/) - A free, automated, and open certificate authority for SSL certificates.
-
 ## Author
 
-- [Alohe](https://github.com/alohe) 
+- [Alohe](https://x.com/alemalohe) 
 
 Feel free to reach out to me on 𝕏 [@alemalohe](https://x.com/alemalohe) if you have any questions or feedback! 
 
