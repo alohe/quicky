@@ -1221,16 +1221,24 @@ async function handleAddDomain(projects) {
 
     // Obtain SSL certificate using Certbot
     try {
-      execSync("certbot --version", { stdio: "ignore" });
+      execSync("which certbot", { stdio: "ignore" });
+      execSync("which python3-certbot-nginx", { stdio: "ignore" });
     } catch (error) {
       execSync("sudo apt install certbot python3-certbot-nginx -y", {
         stdio: "inherit",
       });
     } finally {
-      execSync(
-        `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${config.email}`,
-        { stdio: "inherit" }
-      );
+      try {
+        execSync(
+          `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${config.email}`,
+          { stdio: "inherit" }
+        );
+      } catch (error) {
+        console.error(
+          chalk.red(`Failed to obtain SSL certificate: ${error.message}`)
+        );
+        process.exit(1);
+      }
     }
 
     log(chalk.green(`SSL certificate obtained and configured for ${domain}.`));
