@@ -483,11 +483,44 @@ program
         }
       }
 
+      // Check if swap space is already enabled
+      const checkSwap = () => {
+        try {
+          const swapInfo = execSync("swapon --show", { encoding: "utf-8" });
+          return swapInfo.includes("/swapfile");
+        } catch (error) {
+          return false;
+        }
+      };
+
+      // Create and enable swap space if not already enabled
+      const createSwap = () => {
+        try {
+          log(chalk.yellow("Creating swap space..."));
+          execSync("sudo fallocate -l 1G /swapfile", { stdio: "inherit" });
+          execSync("sudo chmod 600 /swapfile", { stdio: "inherit" });
+          execSync("sudo mkswap /swapfile", { stdio: "inherit" });
+          execSync("sudo swapon /swapfile", { stdio: "inherit" });
+          execSync("echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab", { stdio: "inherit" });
+          log(chalk.green("✔️ Swap space created and enabled successfully."));
+        } catch (error) {
+          console.error(chalk.red(`Failed to create swap space: ${error.message}`));
+          process.exit(1);
+        }
+      };
+
+      if (!checkSwap()) {
+        createSwap();
+      } else {
+        log(chalk.green("Swap space is already enabled."));
+      }
+
       const installCommand =
         packageManager === "bun" ? "bun install" : "npm install";
       const buildCommand =
         packageManager === "bun" ? "bun run build" : "npm run build";
       const startCommand = `pm2 start npm --name "${repo}" -- start -- --port ${port}`;
+
 
       // Install dependencies and build the project
       try {
@@ -678,14 +711,16 @@ program
             await sleep(1000);
             spinner.update({ text: " Installing dependencies..." });
             const packageManager = config.packageManager || "npm";
-            const installCommand = packageManager === "bun" ? "bun install" : "npm install";
+            const installCommand =
+              packageManager === "bun" ? "bun install" : "npm install";
             execSync(`cd ${repoPath} && ${installCommand}`, {
               stdio: "inherit",
             });
 
             await sleep(1000);
             spinner.update({ text: " Building the project..." });
-            const buildCommand = packageManager === "bun" ? "bun run build" : "npm run build";
+            const buildCommand =
+              packageManager === "bun" ? "bun run build" : "npm run build";
             execSync(`cd ${repoPath} && ${buildCommand}`, {
               stdio: "inherit",
             });
@@ -883,7 +918,7 @@ program
 // Function to add a new domain or subdomain and configure Nginx and SSL
 async function handleAddDomain(projects) {
   try {
-    const { project, domain, isDefault } = await inquirer.prompt([
+    const { project, domain } = await inquirer.prompt([
       {
         type: "list",
         name: "project",
@@ -901,12 +936,6 @@ async function handleAddDomain(projects) {
             ? true
             : "Please enter a valid domain.";
         },
-      },
-      {
-        type: "confirm",
-        name: "isDefault",
-        message: "Is this the default domain (listening on port 80)?",
-        default: false,
       },
     ]);
 
@@ -942,58 +971,118 @@ async function handleAddDomain(projects) {
     // Check if the domain already exists
     if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
       log(chalk.red(`Error: Domain ${domain} already exists.`));
+      log(
+        `Please remove the existing configuration first or choose a different domain.`
+      );
+      log(
+        `You can use the ${chalk.green(
+          "quicky domains"
+        )} command to manage domains.`
+      );
       return;
     }
 
     let nginxConfig = `
-server {
-    server_name ${domain};
-    location / {
-        proxy_pass http://localhost:${selectedProject.port};
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header Host $proxy_host;
-        proxy_set_header X-NginX-Proxy true;
-        proxy_busy_buffers_size   5000k;
-        proxy_buffers   4 5000k;
-        proxy_buffer_size   5000k;
-    }
-}`;
+  limit_req_zone $binary_remote_addr zone=one:10m rate=10r/s;
 
-    // If this is the default domain, add listen 80 directive
-    if (isDefault) {
-      nginxConfig = `
-server {
+  server {
     listen 80;
     server_name ${domain};
+
+    # Main location block for proxying to the Next.js application
     location / {
-        proxy_pass http://localhost:${selectedProject.port};
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header Host $proxy_host;
-        proxy_set_header X-NginX-Proxy true;
-        proxy_busy_buffers_size   5000k;
-        proxy_buffers   4 5000k;
-        proxy_buffer_size   5000k;
+      # Enable rate limiting to prevent abuse
+      limit_req zone=one burst=5 nodelay;
+
+      # Proxy settings for Next.js application
+      proxy_pass http://localhost:${selectedProject.port};
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection 'upgrade';
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-NginX-Proxy true;
+
+      # Optimize buffering and memory limits for large requests
+      proxy_busy_buffers_size 512k;
+      proxy_buffers 4 512k;
+      proxy_buffer_size 256k;
+
+      # Disable buffering for real-time applications (like Next.js with WebSocket)
+      proxy_buffering off;
+      proxy_set_header X-Accel-Buffering no;
+
+      # Caching control headers (prevents caching for dynamic content)
+      add_header Cache-Control no-store;
+
+      # Timeouts and keepalive settings to prevent disruptions
+      proxy_connect_timeout 60s;
+      proxy_send_timeout 60s;
+      proxy_read_timeout 60s;
+      keepalive_timeout 60s;
+
+      # Handle large request bodies if needed
+      client_max_body_size 50M;
     }
-}`;
+
+    # Serve static assets with caching (adjust the pattern if needed)
+    location ~* \.(ico|css|js|gif|jpe?g|png|woff2?|ttf|svg|eot)$ {
+      expires 30d;
+      add_header Cache-Control "public, no-transform";
+      try_files $uri $uri/ =404;
     }
+
+    # Logs for debugging and monitoring
+    access_log /var/log/nginx/${domain}-access.log;
+    error_log /var/log/nginx/${domain}-error.log;
+  }
+
+  # Additional security headers for best practices
+  add_header X-Content-Type-Options "nosniff";
+  add_header X-Frame-Options "DENY";
+  add_header X-XSS-Protection "1; mode=block";
+  add_header Referrer-Policy "no-referrer-when-downgrade";
+  add_header Content-Security-Policy "default-src 'self'; img-src *; media-src * data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:";
+  `;
 
     // Write Nginx config to the sites-available  and sites-enabled directories
-    const tempFilePath = `/tmp/${domain}.conf`;
-    fs.writeFileSync(tempFilePath, nginxConfig, { mode: 0o644 });
+    execSync(
+      `sudo cat > ${nginxConfigPath} <<EOL
+  ${nginxConfig}
+  EOL`,
+      { stdio: "inherit" }
+    );
 
-    execSync(`sudo mv ${tempFilePath} ${nginxConfigPath}`, {
-      stdio: "inherit",
-    });
-
+    // Create a symlink to the sites-enabled directory
     execSync(`sudo ln -s ${nginxConfigPath} ${nginxSymlinkPath}`, {
       stdio: "inherit",
     });
 
     // Restart Nginx to apply the changes
     execSync(`sudo service nginx restart`, { stdio: "inherit" });
+
     log(chalk.green(`Nginx configuration created for ${domain}.`));
+
+    if (!config.email) {
+      const { email } = await inquirer.prompt([
+        {
+          type: "input",
+          name: "email",
+          message: "Enter your email address for SSL certificate:",
+          validate: (input) => {
+            const emailRegex = /\S+@\S+\.\S+/;
+            return emailRegex.test(input)
+              ? true
+              : "Please enter a valid email.";
+          },
+        },
+      ]);
+
+      config.email = email;
+      saveConfig(config);
+    }
 
     // Obtain SSL certificate using Certbot
     execSync(
@@ -1014,20 +1103,14 @@ server {
       return;
     }
 
-    config.domains.push({ pid: projectPid, domain, isDefault });
+    config.domains.push({ pid: projectPid, domain });
     saveConfig(config);
     log(
       chalk.green(
         `Domain ${domain} added successfully to project ${selectedProject.repo}.`
       )
     );
-    log(
-      chalk.green(
-        `You can now access your project at ${
-          isDefault ? "http" : "https"
-        }://${domain}`
-      )
-    );
+    log(chalk.green(`You can now access your project at https://${domain}`));
     log(
       `Please make sure your domain is pointing to this server's IP address. It may take up to 48 hours for DNS changes to take effect.`
     );
@@ -1129,7 +1212,6 @@ async function handleListDomains(projects) {
           chalk.white(project.repo),
           chalk.blue(domain.domain),
           chalk.white(project.port),
-          domain.isDefault ? chalk.green("Yes") : chalk.red("No"),
         ]);
       });
     });
