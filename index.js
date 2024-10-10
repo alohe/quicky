@@ -40,9 +40,12 @@ async function checkForUpdates() {
   }
 }
 
-// Check for updates after the command is finished
+// Check for updates after the command execution
 program.hook("postAction", async () => {
-  if (!process.argv.includes("upgrade")) {
+  const excludedCommands = ["upgrade", "uninstall"];
+  const command = process.argv[2];
+  
+  if (!excludedCommands.includes(command)) {
     await checkForUpdates();
   }
 });
