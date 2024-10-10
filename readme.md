@@ -123,5 +123,3 @@ Feel free to reach out to me on 𝕏 [@alemalohe](https://x.com/alemalohe) if yo
 ## Contributing
 
 Contributions are welcome! Please read the [CONTRIBUTING](CONTRIBUTING.md) file for guidelines on how to get started.
-
-Feel free to reach out to me on 𝕏 [@alemalohe](https://x.com/alemalohe) if you have any questions or feedback! 
