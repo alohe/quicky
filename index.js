@@ -133,9 +133,9 @@ function help() {
       "domains"
     )}   Manage domains and subdomains for the projects`
   );
-
-  log(`\n  ${chalk.blue.bold("install")}   Install quicky globally`);
+  log(`  ${chalk.blue.bold("install")}   Install quicky globally`);
   log(`  ${chalk.blue.bold("upgrade")}   Upgrade quicky to the latest version`);
+  log(`  ${chalk.blue.bold("uninstall")} Uninstall the CLI tool globally`);
   log("");
   log("Options:");
   log("  --help    Display help for the command");
