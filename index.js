@@ -44,7 +44,7 @@ async function checkForUpdates() {
 program.hook("postAction", async () => {
   const excludedCommands = ["upgrade", "uninstall"];
   const command = process.argv[2];
-  
+
   if (!excludedCommands.includes(command)) {
     await checkForUpdates();
   }
@@ -1091,18 +1091,31 @@ async function handleAddDomain(projects) {
     const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
     const nginxSymlinkPath = `/etc/nginx/sites-enabled/${domain}`;
 
-    // Check if the domain already exists
+    // Check if the domain already exists in Nginx configuration
     if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
-      log(chalk.red(`Error: Domain ${domain} already exists.`));
-      log(
-        `Please remove the existing configuration first or choose a different domain.`
+      // Check if the domain exists in the config.json
+      const domainExistsInConfig = config.domains.some(
+        (d) => d.domain === domain
       );
-      log(
-        `You can use the ${chalk.green(
-          "quicky domains"
-        )} command to manage domains.`
-      );
-      return;
+      if (!domainExistsInConfig) {
+        log(
+          chalk.yellow(
+            `Warning: Domain ${domain} configuration files exist but domain is not in config.json.`
+          )
+        );
+        log(`Overriding the existing configuration files for ${domain}.`);
+      } else {
+        log(chalk.red(`Error: Domain ${domain} already exists.`));
+        log(
+          `Please remove the existing configuration first or choose a different domain.`
+        );
+        log(
+          `You can use the ${chalk.green(
+            "quicky domains"
+          )} command to manage domains.`
+        );
+        return;
+      }
     }
 
     let nginxConfig = `
@@ -1182,7 +1195,7 @@ async function handleAddDomain(projects) {
     if (!fs.existsSync(nginxSymlinkPath)) {
       // Create a symlink to the sites-enabled directory
       execSync(`sudo ln -s ${nginxConfigPath} ${nginxSymlinkPath}`, {
-      stdio: "inherit",
+        stdio: "inherit",
       });
     } else {
       log(chalk.yellow(`Symlink already exists for ${domain}.`));
@@ -1360,8 +1373,7 @@ program
       // Get the currently installed version
       const currentVersion = execSync("npm list -g quicky --depth=0", {
         encoding: "utf-8",
-      })
-        .match(/quicky@([\d.]+)/)[1];
+      }).match(/quicky@([\d.]+)/)[1];
 
       // Get the latest version available in the npm registry
       const latestVersion = execSync("npm show quicky version", {
@@ -1370,7 +1382,9 @@ program
 
       if (currentVersion === latestVersion) {
         console.log(
-          chalk.yellow(`Quicky CLI is already at the latest version (${currentVersion}).`)
+          chalk.yellow(
+            `Quicky CLI is already at the latest version (${currentVersion}).`
+          )
         );
         return;
       }
@@ -1380,13 +1394,14 @@ program
       execSync("sudo npm install -g quicky", { stdio: "inherit" });
 
       console.log(
-        chalk.green(`Quicky CLI upgraded successfully to version ${latestVersion}.`)
+        chalk.green(
+          `Quicky CLI upgraded successfully to version ${latestVersion}.`
+        )
       );
     } catch (error) {
       console.error(chalk.red(`Failed to upgrade the CLI: ${error.message}`));
     }
   });
-
 
 // Global error handling
 process.on("unhandledRejection", (reason, promise) => {
