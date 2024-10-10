@@ -580,7 +580,7 @@ program
             log(chalk.yellow("Unzip is not installed. Installing unzip..."));
             execSync("sudo apt-get install -y unzip", { stdio: "inherit" });
           } finally {
-            execSync("curl -fsSL https://bun.sh/install | bash", {
+            await execSync("curl -fsSL https://bun.sh/install | bash", {
               stdio: "inherit",
             });
 
