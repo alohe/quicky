@@ -1171,12 +1171,12 @@ async function handleAddDomain(projects) {
   `;
 
     // Write Nginx config to the sites-available  and sites-enabled directories
-    execSync(
-      `sudo cat > ${nginxConfigPath} <<EOL
-  ${nginxConfig}
-  EOL`,
-      { stdio: "inherit" }
-    );
+    const tempFilePath = `/tmp/${domain}.conf`;
+    fs.writeFileSync(tempFilePath, nginxConfig, { mode: 0o644 });
+
+    execSync(`sudo mv ${tempFilePath} ${nginxConfigPath}`, {
+      stdio: "inherit",
+    });
 
     // Create a symlink to the sites-enabled directory
     execSync(`sudo ln -s ${nginxConfigPath} ${nginxSymlinkPath}`, {
