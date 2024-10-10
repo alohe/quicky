@@ -714,13 +714,12 @@ program
         chalk.cyan.bold("Port"),
         chalk.cyan.bold("PM2 Status"),
         chalk.cyan.bold("Last updated"),
-        chalk.cyan.bold("Domains"),
       ],
       style: {
         head: ["cyan", "bold"],
       },
       wordWrap: true,
-      colWidths: [10, 15, 15, 10, 15, 20, 30],
+      colWidths: [10, 15, 15, 10, 15, 20],
     });
 
     config.projects.forEach((project) => {
@@ -738,11 +737,6 @@ program
         pm2Status = "Error";
       }
 
-      const domains = (config.domains || [])
-        .filter((domain) => domain.project === project.repo)
-        .map((domain) => domain.name)
-        .join(", ");
-
       table.push([
         chalk.yellow.bold(project.pid),
         chalk.white(project.owner),
@@ -754,7 +748,6 @@ program
             addSuffix: true,
           })
         ),
-        domains ? chalk.white(domains) : chalk.gray("No domains"),
       ]);
     });
 
