@@ -126,18 +126,16 @@ function help() {
   log(
     `  ${chalk.blue.bold(
       "manage"
-    )}    start, stop, restart, update, or delete a project \n`
+    )}    Start, stop, restart, update, or delete a project \n`
   );
   log(
     `  ${chalk.blue.bold(
       "domains"
     )}   Manage domains and subdomains for the projects`
   );
-  log(
-    `  ${chalk.blue.bold(
-      "upgrade"
-    )}   Upgrade the CLI tool to the latest version`
-  );
+
+  log(`\n  ${chalk.blue.bold("install")}   Install quicky globally`);
+  log(`  ${chalk.blue.bold("upgrade")}   Upgrade quicky to the latest version`);
   log("");
   log("Options:");
   log("  --help    Display help for the command");
@@ -159,6 +157,18 @@ program
 program.option("-h, --help", "Display help for the command").action(() => {
   help();
 });
+
+program
+  .command("install")
+  .description("Install the CLI tool globally")
+  .action(() => {
+    try {
+      execSync("sudo npm install -g quicky", { stdio: "inherit" });
+      log(chalk.green("Quicky has been installed globally."));
+    } catch (error) {
+      console.error(chalk.red(`Failed to install Quicky: ${error.message}`));
+    }
+  });
 
 program
   .command("init")
@@ -501,10 +511,15 @@ program
           execSync("sudo chmod 600 /swapfile", { stdio: "inherit" });
           execSync("sudo mkswap /swapfile", { stdio: "inherit" });
           execSync("sudo swapon /swapfile", { stdio: "inherit" });
-          execSync("echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab", { stdio: "inherit" });
+          execSync(
+            "echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab",
+            { stdio: "inherit" }
+          );
           log(chalk.green("✔️ Swap space created and enabled successfully."));
         } catch (error) {
-          console.error(chalk.red(`Failed to create swap space: ${error.message}`));
+          console.error(
+            chalk.red(`Failed to create swap space: ${error.message}`)
+          );
           process.exit(1);
         }
       };
@@ -520,7 +535,6 @@ program
       const buildCommand =
         packageManager === "bun" ? "bun run build" : "npm run build";
       const startCommand = `pm2 start npm --name "${repo}" -- start -- --port ${port}`;
-
 
       // Install dependencies and build the project
       try {
