@@ -509,16 +509,28 @@ program
 
       // Check if the directory already exists and is not empty
       if (fs.existsSync(repoPath) && fs.readdirSync(repoPath).length > 0) {
-        log(
-          `⚠️  The directory ${chalk
-            .hex("#FFA500")
-            .bold(
-              repoPath
-            )} already exists and is not empty. \n✨ Use the ${chalk.green(
-            "manage"
-          )} command to manage the project.`
-        );
-        process.exit(1);
+        const existingProject = config.projects.find((p) => p.repo === repo);
+        if (!existingProject) {
+          log(
+            `⚠️  The directory ${chalk
+              .hex("#FFA500")
+              .bold(
+                repoPath
+              )} already exists and is not associated with any project. Deleting the directory...`
+          );
+          fs.removeSync(repoPath);
+        } else {
+          log(
+            `⚠️  The directory ${chalk
+              .hex("#FFA500")
+              .bold(
+                repoPath
+              )} already exists and is not empty. \n✨ Use the ${chalk.green(
+              "manage"
+            )} command to manage the project.`
+          );
+          process.exit(1);
+        }
       }
 
       if (!config.github || !config.github.access_token) {
@@ -695,6 +707,53 @@ program
   });
 
 // list all projects and domains
+const status = () => {
+  const table = new Table({
+    head: [
+      chalk.cyan.bold("PID"),
+      chalk.cyan.bold("Owner"),
+      chalk.cyan.bold("Repository"),
+      chalk.cyan.bold("Port"),
+      chalk.cyan.bold("Status"),
+      chalk.cyan.bold("Last Updated"),
+    ],
+    style: {
+      head: ["cyan", "bold"],
+    },
+    wordWrap: true,
+    colWidths: [10, 15, 15, 10, 15, 20],
+  });
+
+  config.projects.forEach((project) => {
+    let pm2Status = "Not Running";
+    try {
+      const pm2List = execSync(`pm2 jlist`, { encoding: "utf-8" });
+      const pm2Instances = JSON.parse(pm2List);
+      const instance = pm2Instances.find((inst) => inst.name === project.repo);
+      if (instance) {
+        pm2Status = instance.pm2_env.status;
+      }
+    } catch (error) {
+      pm2Status = "Error";
+    }
+
+    table.push([
+      chalk.yellow.bold(project.pid),
+      chalk.white(project.owner),
+      chalk.white(project.repo),
+      chalk.greenBright.bold(project.port),
+      pm2Status === "online" ? chalk.green(pm2Status) : chalk.red(pm2Status),
+      chalk.white(
+        formatDistanceToNow(new Date(project.last_updated), {
+          addSuffix: true,
+        })
+      ),
+    ]);
+  });
+
+  log(table.toString());
+};
+
 program
   .command("list")
   .description(
@@ -706,62 +765,24 @@ program
       return;
     }
 
-    const table = new Table({
-      head: [
-        chalk.cyan.bold("PID"),
-        chalk.cyan.bold("Owner"),
-        chalk.cyan.bold("Repository"),
-        chalk.cyan.bold("Port"),
-        chalk.cyan.bold("PM2 Status"),
-        chalk.cyan.bold("Last updated"),
-      ],
-      style: {
-        head: ["cyan", "bold"],
-      },
-      wordWrap: true,
-      colWidths: [10, 15, 15, 10, 15, 20],
-    });
+    status();
 
-    config.projects.forEach((project) => {
-      let pm2Status = "Not Running";
-      try {
-        const pm2List = execSync(`pm2 jlist`, { encoding: "utf-8" });
-        const pm2Instances = JSON.parse(pm2List);
-        const instance = pm2Instances.find(
-          (inst) => inst.name === project.repo
-        );
-        if (instance) {
-          pm2Status = instance.pm2_env.status;
-        }
-      } catch (error) {
-        pm2Status = "Error";
-      }
-
-      table.push([
-        chalk.yellow.bold(project.pid),
-        chalk.white(project.owner),
-        chalk.white(project.repo),
-        chalk.greenBright.bold(project.port),
-        pm2Status === "online" ? chalk.green(pm2Status) : chalk.red(pm2Status),
-        chalk.white(
-          formatDistanceToNow(new Date(project.last_updated), {
-            addSuffix: true,
-          })
-        ),
-      ]);
-    });
-
-    log(chalk.green("\nProjects:"));
-    log(table.toString());
-
-    log(chalk.green("\nTo manage a project, use the 'quicky manage' command."));
-    log(chalk.green("For more details, visit https://quicky.dev\n"));
+    log(
+      `\nTo manage your projects, use the ${chalk.blue(
+        "quicky manage"
+      )} command. You can ${chalk.blue("start")}, ${chalk.blue(
+        "stop"
+      )}, ${chalk.blue("restart")}, ${chalk.blue("update")}, or ${chalk.red(
+        "delete"
+      )} your projects.`
+    );
+    log(`For more details, visit ${chalk.green("https://quicky.dev")}\n`);
   });
 
 // start / stop / restart projects (pm2 wrapper) also delete projects
 program
   .command("manage")
-  .description("Start, stop, or restart a project")
+  .description("start, stop, restart, update, or delete a project")
   .action(async () => {
     try {
       if (!config.projects.length) {
@@ -769,8 +790,8 @@ program
         return;
       }
 
-      // run list command to show active projects
-      execSync("quicky list", { stdio: "inherit" });
+      // List all projects and their status
+      status();
 
       const { selectedProject, action } = await inquirer.prompt([
         {
@@ -992,8 +1013,12 @@ program
       }
 
       try {
-        execSync("certbot --version", { stdio: "ignore" });
+        // Check if certbot and the nginx plugin are installed
+        execSync("certbot --version && certbot plugins | grep nginx", {
+          stdio: "ignore",
+        });
       } catch (error) {
+        // If not installed, install certbot and the nginx plugin
         execSync("sudo apt install certbot python3-certbot-nginx -y", {
           stdio: "inherit",
         });
