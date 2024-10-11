@@ -31,14 +31,6 @@ Please follow best practices and ensure that your code is efficient. While we do
 - Avoid unnecessary complexity.
 - Ensure your code is efficient and performs well.
 
-### Testing
-
-Please ensure that your code is well-tested. We use [pytest](https://docs.pytest.org/en/stable/) for testing. You can run the tests using the following command:
-
-```bash
-pytest
-```
-
 ## License
 
 By contributing to this project, you agree that your contributions will be licensed under the [MIT License](LICENSE).
