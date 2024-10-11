@@ -1,13 +1,18 @@
 # Quicky
-A CLI tool for effortless Next.js deployment and management. Initialize, deploy from GitHub, update, delete, and manage projects. Handles PM2 instances and domain configuration. Streamlines the entire lifecycle of Next.js applications on remote servers.
+
+A CLI tool that streamlines the deployment and management of self-hosted Next.js projects, enabling initialization, deployment from GitHub, updating, deleting, and managing applications, along with effortless setup of domains and SSL certificates, simplifying the entire lifecycle of Next.js apps on remote servers.
 
 ## Features
 
 - 🐙 **GitHub Integration**: Initialize, deploy, and manage Next.js projects from private and public GitHub repositories.
+
 - ⚙️ **Process Management**: Leverage PM2 for application lifecycle and monitoring.
+
 - 🔄 **Project Maintenance**: Easily update or remove deployed projects.
-- 🌐 **Domain & SSL Automation**: Automatically configure Nginx for custom domains and SSL certificates.
-- 📋 **Configuration Overview**: List and inspect details of all deployed projects and their domains.
+
+- 🌐 **Domain & SSL Automation**: Automatically configure Nginx for custom domains and SSL certificates, allowing you to add/remove domains from your projects.
+
+- 📝 **Configuration Overview**: List and inspect details of all deployed projects and their domains.
 
 ## Prerequisites
 
@@ -20,13 +25,19 @@ sudo apt install -y nodejs npm
 
 ## Installation
 
-You can install Quicky globally using npm:
+You can install Quicky globally using npx or npm:
+
+```bash
+npx quicky@latest install
+```
+
+or
 
 ```bash
 sudo npm install -g quicky
 ```
 
-**Note**: Using `sudo` is required to install Quicky globally and to avoid permission issues while configuring Nginx.
+**Note**: Using `sudo` is required to install Quicky globally and to avoid permission issues while configuring domains.
 
 ## Usage
 
@@ -38,15 +49,26 @@ quicky init
 
 Prompts you to enter your GitHub credentials and basic configurations for setting up your projects.
 
+Quicky requires your GitHub access token and username to interact with your repositories. To create a new token, follow these steps:
+1. Visit your [GitHub Personal Access Tokens page](https://github.com/settings/tokens) and make sure to use **Tokens (classic)**.
+2. Click **Generate new token**.
+3. Select the required scopes for repository access.
+4. Click **Generate token**.
+5. Copy the token and provide it to Quicky as your GitHub access token which will be stored locally for future use.
+
 ### 2. Deploy a Project
 
 ```bash
 quicky deploy
 ```
 
-Prompts you to enter your GitHub username or organization name, repository name, and the port number for deployment.
+This command will prompt you to provide:
 
-**Environment Variables** - During deployment, you’ll be asked if you want to add environment variables to your project or not.
+- Your GitHub username or any organization name
+- The repository name
+- The port number on which the project should run (e.g., 3000)
+
+**Environment Variables** - During deployment, you'll be asked whether you'd like to add environment variables to your project.
 
 ### 3. Manage Projects
 
@@ -69,32 +91,22 @@ Displays an overview of all deployed projects, including the following details:
 - **Repository**: Name of the GitHub repository.
 - **Port**: Port number on which the project is running.
 - **PM2 Status**: Current status of the PM2 process.
-- **Domains**: Associated domains for the project.
 - **Last updated**: Date and time of the last deployment/update.
 
 ### 5. Domains
 
-**Prerequisites** - Before adding a domain to your project, you need to:
+Before adding a domain to your project, you need to:
 
 1. Purchase a domain name (e.g., [Namecheap](https://www.namecheap.com/), [GoDaddy](https://www.godaddy.com/), etc.)
 2. Purchase a Linux Ubuntu server (e.g., [Hetzner](https://www.hetzner.com/cloud/), [DigitalOcean](https://www.digitalocean.com/), etc.)
-3. Create an `A` DNS record pointing to your server IPv4 address
+3. Create an `A` DNS record pointing to your servers **IPv4** address
 
 ```bash
 quicky domains
 ```
+Effortlessly **add** and **remove** domains and subdomains for your projects. Seamlessly manages Nginx configurations and automates SSL certificate provisioning, ensuring your applications are always secure and accessible.
 
-Allows you to **add** and **remove** domains and subdomains for your projects effortlessly. Handles Nginx configuration and SSL certificates.
-
-### 6. Install Quicky
-
-```bash
-quicky install
-```
-
-Installs Quicky globally.
-
-### 7. Upgrade Quicky
+### 6. Upgrade Quicky
 
 ```bash
 quicky upgrade
@@ -108,7 +120,7 @@ Upgrades Quicky to the latest version.
 quicky uninstall
 ```
 
-Uninstalls Quicky globally.
+Removes Quicky from your system.
 
 ## License
 
