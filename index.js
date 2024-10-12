@@ -237,15 +237,24 @@ program
       ]);
 
       if (confirmUninstall) {
-        // Stop all PM2 instances
+        // Stop and delete all PM2 instances managed by Quicky
         try {
-          execSync("pm2 stop all && pm2 delete all", { stdio: "inherit" });
-          log(chalk.green("All PM2 instances have been stopped and deleted."));
+          const projectNames = config.projects.map((project) => project.repo);
+          projectNames.forEach((name) => {
+            execSync(`pm2 stop ${name} && pm2 delete ${name}`, {
+              stdio: "inherit",
+            });
+          });
+          log(
+            chalk.green(
+              "All PM2 instances managed by Quicky have been stopped and deleted."
+            )
+          );
         } catch (error) {
           log(chalk.red(`Failed to stop PM2 instances: ${error.message}`));
         }
 
-        // Delete Nginx configurations
+        // Delete Nginx configurations managed by Quicky
         try {
           const domains = config.domains || [];
           domains.forEach((domain) => {
@@ -260,7 +269,7 @@ program
           });
           log(
             chalk.green(
-              "Nginx configurations for all domains have been deleted."
+              "Nginx configurations for all domains managed by Quicky have been deleted."
             )
           );
         } catch (error) {
@@ -269,33 +278,23 @@ program
           );
         }
 
-        // Delete project files
-        try {
-          fs.removeSync(projectsDir);
-          log(chalk.green("Project files have been deleted."));
-        } catch (error) {
-          log(chalk.red(`Failed to delete project files: ${error.message}`));
-        }
-
-        // Delete configuration files
+        // Delete the default folder where projects and configurations are stored
         try {
           fs.removeSync(defaultFolder);
-          log(chalk.green("Configuration files have been deleted."));
+          log(chalk.green("Quicky has been uninstalled successfully."));
         } catch (error) {
-          log(
-            chalk.red(`Failed to delete configuration files: ${error.message}`)
-          );
+          log(chalk.red(`Failed to delete Quicky folder: ${error.message}`));
         }
 
         // Uninstall the CLI tool
         try {
           execSync("sudo npm uninstall -g quicky", { stdio: "inherit" });
-          log(chalk.green("Quicky has been uninstalled globally."));
+          log(chalk.green("✔ Quicky has been uninstalled successfully."));
         } catch (error) {
           log(chalk.red(`Failed to uninstall Quicky: ${error.message}`));
         }
       } else {
-        log(chalk.yellow("Uninstallation cancelled."));
+        log(chalk.yellow("Uninstallation of projects cancelled."));
       }
     } catch (error) {
       console.error(chalk.red(`Error: ${error.message}`));
