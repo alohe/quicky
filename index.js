@@ -30,10 +30,35 @@ async function checkForUpdates() {
       console.log(
         `\n🚀 A new version of Quicky (v${chalk.bold.blue(
           latest
-        )}) is available! Run ${chalk.green.bold(
-          "quicky upgrade"
-        )} or ${chalk.green.bold("sudo npm install -g quicky")} to update.\n`
+        )}) is available!`
       );
+
+      const { shouldUpgrade } = await inquirer.prompt([
+        {
+          type: "confirm",
+          name: "shouldUpgrade",
+          message:
+            "Would you like to update quicky to the latest version? 🔒 Your configurations will be preserved.",
+          default: true,
+        },
+      ]);
+
+      if (shouldUpgrade) {
+        try {
+          execSync("sudo npm install -g quicky", { stdio: "inherit" });
+          console.log(
+            chalk.green("Quicky has been upgraded to the latest version.")
+          );
+        } catch (error) {
+          console.error(
+            chalk.red(`Failed to upgrade Quicky: ${error.message}`)
+          );
+        }
+      } else {
+        console.log(
+          chalk.yellow("You can upgrade later by running 'quicky upgrade'.")
+        );
+      }
     }
   } catch (error) {
     console.error("Error checking for updates:", error);
@@ -512,22 +537,32 @@ program
         const existingProject = config.projects.find((p) => p.repo === repo);
         if (!existingProject) {
           log(
-            `⚠️  The directory ${chalk
+            `⚠️  Directory ${chalk
               .hex("#FFA500")
-              .bold(
-                repoPath
-              )} already exists and is not associated with any project. Deleting the directory...`
+              .bold(repoPath)} exists and is not linked to any project.`
           );
-          fs.removeSync(repoPath);
+          const { deleteFolder } = await inquirer.prompt([
+            {
+              type: "confirm",
+              name: "deleteFolder",
+              message: `Delete ${repoPath} and continue?`,
+              default: false,
+            },
+          ]);
+
+          if (deleteFolder) {
+            fs.removeSync(repoPath);
+          } else {
+            log(chalk.yellow("Operation cancelled."));
+            process.exit(1);
+          }
         } else {
           log(
-            `⚠️  The directory ${chalk
+            `⚠️ Directory ${chalk
               .hex("#FFA500")
-              .bold(
-                repoPath
-              )} already exists and is not empty. \n✨ Use the ${chalk.green(
+              .bold(repoPath)} exists and is not empty. Use ${chalk.green(
               "manage"
-            )} command to manage the project.`
+            )} to manage the project.`
           );
           process.exit(1);
         }
@@ -578,6 +613,12 @@ program
         );
         execSync(`nano ${envFilePath}`, { stdio: "inherit" });
       }
+
+      log(
+        chalk.green(
+          `✔ Project ${chalk.bold(repo)} cloned successfully. Deploying...`
+        )
+      );
 
       const packageManager = config.packageManager || "npm";
 
@@ -634,7 +675,7 @@ program
             "echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab",
             { stdio: "inherit" }
           );
-          log(chalk.green("✔️ Swap space created and enabled successfully."));
+          log(chalk.green("✔ Swap space created and enabled successfully."));
         } catch (error) {
           console.error(
             chalk.red(`Failed to create swap space: ${error.message}`)
@@ -645,8 +686,6 @@ program
 
       if (!checkSwap()) {
         createSwap();
-      } else {
-        log(chalk.green("Swap space is already enabled."));
       }
 
       const installCommand =
@@ -844,9 +883,46 @@ program
             await sleep(1000);
             spinner.update({ text: "Cleaning up temporary files..." });
             execSync(`rm -rf ${tempPath}`);
-
+            spinner.success({ text: "Repository updated successfully." });
             await sleep(1000);
-            spinner.update({ text: " Installing dependencies..." });
+
+            // update .env file if it exists
+            const envFilePath = `${repoPath}/.env`;
+            if (fs.existsSync(envFilePath)) {
+              const { updateEnv } = await inquirer.prompt([
+                {
+                  type: "confirm",
+                  name: "updateEnv",
+                  message: `Do you want to update the .env file for ${project.repo}?`,
+                  default: false,
+                },
+              ]);
+
+              if (updateEnv) {
+                execSync(`nano ${envFilePath}`, { stdio: "inherit" });
+              }
+            } else {
+              // prompt if user wants to add a .env file
+              const { addEnv } = await inquirer.prompt([
+                {
+                  type: "confirm",
+                  name: "addEnv",
+                  message: `Do you want to add a .env file for ${project.repo}?`,
+                  default: false,
+                },
+              ]);
+
+              if (addEnv) {
+                fs.writeFileSync(
+                  envFilePath,
+                  "# Add your environment variables below\n",
+                  { flag: "wx" }
+                );
+                execSync(`nano ${envFilePath}`, { stdio: "inherit" });
+              }
+            }
+
+            // Install dependencies, build the project, and restart the PM2 instance
             const packageManager = config.packageManager || "npm";
             const installCommand =
               packageManager === "bun" ? "bun install" : "npm install";
@@ -855,7 +931,7 @@ program
             });
 
             await sleep(1000);
-            spinner.update({ text: " Building the project..." });
+            spinner.update({ text: " Building the project...\n" });
             const buildCommand =
               packageManager === "bun" ? "bun run build" : "npm run build";
             execSync(`cd ${repoPath} && ${buildCommand}`, {
@@ -864,11 +940,25 @@ program
 
             await sleep(1000);
             spinner.update({ text: " Restarting the project..." });
-            execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
-              stdio: "inherit",
-            });
 
-            await sleep(1000);
+            // Check if the PM2 instance exists
+            try {
+              execSync(`cd ${repoPath} && pm2 describe ${project.repo}`, {
+                stdio: "ignore",
+              });
+              // If it exists, restart
+              execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
+                stdio: "inherit",
+              });
+            } catch (error) {
+              // If it doesn't exist, start it on its port
+              execSync(
+                `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`,
+                {
+                  stdio: "inherit",
+                }
+              );
+            }
 
             // Update the last_updated timestamp
             project.last_updated = new Date().toISOString();

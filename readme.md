@@ -16,7 +16,9 @@ A CLI tool that streamlines the deployment and management of self-hosted Next.js
 
 ## Prerequisites
 
-Quicky requires Node.js and npm to be installed on your system. You can install them using the following commands:
+To install Quicky, first acquire a Linux Ubuntu server from a provider such as  [DigitalOcean](https://m.do.co/c/9b7ccf30c0bd) or [Hetzner](https://www.hetzner.com/cloud/).
+
+After setting up your server, connect to it (e.g., via SSH) and install Node.js and npm by executing the following commands:
 
 ```bash
 sudo apt update
@@ -25,7 +27,7 @@ sudo apt install -y nodejs npm
 
 ## Installation
 
-You can install Quicky globally using npx or npm:
+Install Quicky globally using either `npx` or `npm`:
 
 ```bash
 npx quicky@latest install
@@ -37,7 +39,7 @@ or
 sudo npm install -g quicky
 ```
 
-**Note**: Using `sudo` is required to install Quicky globally and to avoid permission issues while configuring domains.
+**Note**: The `sudo` command is necessary for global installation and to prevent permission issues when configuring domains.
 
 ## Usage
 
@@ -47,7 +49,7 @@ sudo npm install -g quicky
 quicky init
 ```
 
-Prompts you to enter your GitHub credentials and basic configurations for setting up your projects.
+This command will prompt you to enter your GitHub credentials and basic configurations for setting up your projects.
 
 Quicky requires your GitHub access token and username to interact with your repositories. To create a new token, follow these steps:
 1. Visit your [GitHub Personal Access Tokens page](https://github.com/settings/tokens) and make sure to use **Tokens (classic)**.
@@ -97,14 +99,16 @@ Displays an overview of all deployed projects, including the following details:
 
 Before adding a domain to your project, you need to:
 
-1. Purchase a domain name (e.g., [Namecheap](https://www.namecheap.com/), [GoDaddy](https://www.godaddy.com/), etc.)
-2. Purchase a Linux Ubuntu server (e.g., [Hetzner](https://www.hetzner.com/cloud/), [DigitalOcean](https://www.digitalocean.com/), etc.)
-3. Create an `A` DNS record pointing to your servers **IPv4** address
+1. 🛒 **Purchase a domain name** from a registrar like [Namecheap](https://www.namecheap.com/) or [GoDaddy](https://www.godaddy.com/).
+2. 🌐 **Create an `A` DNS record** pointing to your server's **IPv4** address.
+
+Once you have your domain, you can easily manage it with the following command:
 
 ```bash
 quicky domains
 ```
-Effortlessly **add** and **remove** domains and subdomains for your projects. Seamlessly manages Nginx configurations and automates SSL certificate provisioning, ensuring your applications are always secure and accessible.
+
+This command allows you to effortlessly **add** and **remove** domains and subdomains for your projects.
 
 ### 6. Upgrade Quicky
 
