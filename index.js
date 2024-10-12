@@ -110,6 +110,7 @@ const updateProjectsConfig = ({
     owner,
     repo,
     port,
+    pm2Id: `quicky_${pid}`,
     last_updated: new Date().toISOString(),
   };
   const existing = config.projects.find((p) => p.repo === repo);
@@ -117,6 +118,7 @@ const updateProjectsConfig = ({
   if (existing) {
     existing.port = port;
     existing.owner = owner;
+    existing.pm2Id = project.pm2Id;
   } else {
     config.projects.push(project);
   }
@@ -239,10 +241,17 @@ program
       if (confirmUninstall) {
         // Stop all PM2 instances
         try {
-          execSync("pm2 stop all && pm2 delete all", { stdio: "inherit" });
-          log(chalk.green("All PM2 instances have been stopped and deleted."));
+          const quickyInstances = config.projects
+            .map((project) => project.pm2Id)
+            .join(" ");
+          if (quickyInstances) {
+            execSync(`pm2 stop ${quickyInstances} && pm2 delete ${quickyInstances}`, { stdio: "inherit" });
+            log(chalk.green("All Quicky-managed PM2 instances have been stopped and deleted."));
+          } else {
+            log(chalk.yellow("No Quicky-managed PM2 instances found."));
+          }
         } catch (error) {
-          log(chalk.red(`Failed to stop PM2 instances: ${error.message}`));
+          log(chalk.red(`Failed to stop Quicky-managed PM2 instances: ${error.message}`));
         }
 
         // Delete Nginx configurations
@@ -692,7 +701,7 @@ program
         packageManager === "bun" ? "bun install" : "npm install";
       const buildCommand =
         packageManager === "bun" ? "bun run build" : "npm run build";
-      const startCommand = `pm2 start npm --name "${repo}" -- start -- --port ${port}`;
+      const startCommand = `pm2 start npm --name "${project.pm2Id}" -- start -- --port ${port}`;
 
       // Install dependencies and build the project
       try {
@@ -943,17 +952,17 @@ program
 
             // Check if the PM2 instance exists
             try {
-              execSync(`cd ${repoPath} && pm2 describe ${project.repo}`, {
+              execSync(`cd ${repoPath} && pm2 describe ${project.pm2Id}`, {
                 stdio: "ignore",
               });
               // If it exists, restart
-              execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
+              execSync(`cd ${repoPath} && pm2 restart ${project.pm2Id}`, {
                 stdio: "inherit",
               });
             } catch (error) {
               // If it doesn't exist, start it on its port
               execSync(
-                `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`,
+                `cd ${repoPath} && pm2 start npm --name "${project.pm2Id}" -- start -- --port ${project.port}`,
                 {
                   stdio: "inherit",
                 }
@@ -1010,8 +1019,8 @@ program
 
               // Stop and delete the project from PM2 if it exists
               try {
-                execSync(`pm2 stop ${project.repo}`, { stdio: "ignore" });
-                execSync(`pm2 delete ${project.repo}`, { stdio: "ignore" });
+                execSync(`pm2 stop ${project.pm2Id}`, { stdio: "ignore" });
+                execSync(`pm2 delete ${project.pm2Id}`, { stdio: "ignore" });
               } catch (error) {
                 log(
                   chalk.yellow(
@@ -1071,7 +1080,7 @@ program
           console.error(chalk.red(`Error: ${error.message}`));
         }
       } else {
-        const pm2Command = `pm2 ${action} ${project.repo}`;
+        const pm2Command = `pm2 ${action} ${project.pm2Id}`;
 
         try {
           execSync(pm2Command, { stdio: "inherit" });
