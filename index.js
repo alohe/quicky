@@ -375,7 +375,7 @@ async function setupWebhookServer() {
     // Stop and delete the PM2 instance if it exists
     try {
       execSync(
-        `pm2 stop quicky-webhook-server && pm2 delete quicky-webhook-server`,
+        `pm2 stop quicky-webhook-server && pm2 del quicky-webhook-server`,
         {
           stdio: "inherit",
         }
@@ -401,11 +401,45 @@ async function setupWebhookServer() {
 
   // Add a .env file to the webhook server
   const envFilePath = `${webhookPath}/.env`;
+
   fs.writeFileSync(
     envFilePath,
     `WEBHOOK_URL=${webhookUrl}\nWEBHOOK_PORT=${availablePort}\nWEBHOOK_SECRET=${webhookSecret}`,
     { flag: "wx" }
   );
+
+  // Update the webhook URL and secret for all the projects managed by Quicky
+  if (config.projects && config.projects.length > 0) {
+    for (const project of config.projects) {
+      if (project.webhookId) {
+        const webhookConfig = {
+          config: {
+            url: `https://${webhookUrl}/webhook`,
+            content_type: "json",
+            secret: webhookSecret,
+          },
+        };
+
+        try {
+          await axios.patch(
+            `https://api.github.com/repos/${project.owner}/${project.repo}/hooks/${project.webhookId}`,
+            webhookConfig,
+            {
+              headers: {
+                Authorization: `Bearer ${config.github.access_token}`,
+              },
+            }
+          );
+          console.log(`Webhook updated for project: ${project.repo}`);
+        } catch (error) {
+          console.error(
+            `Error updating webhook for project ${project.repo}: ${error.message}`
+          );
+        }
+      }
+    }
+  }
+
   try {
     // Start the webhook server with PM2
     execSync(
@@ -779,19 +813,16 @@ program
         try {
           const projectNames = config.projects.map((project) => project.repo);
           projectNames.forEach((name) => {
-            execSync(`pm2 stop ${name} && pm2 delete ${name}`, {
+            execSync(`pm2 del ${name}`, {
               stdio: "inherit",
             });
           });
 
           // Stop and delete the webhook server if it exists
           if (config.webhook && config.webhook.pm2Name) {
-            execSync(
-              `pm2 stop ${config.webhook.pm2Name} && pm2 delete ${config.webhook.pm2Name}`,
-              {
-                stdio: "inherit",
-              }
-            );
+            execSync(`pm2 del ${config.webhook.pm2Name}`, {
+              stdio: "inherit",
+            });
           }
 
           log(
@@ -1513,7 +1544,7 @@ program
               // Stop and delete the project from PM2 if it exists
               try {
                 execSync(`pm2 stop ${project.repo}`, { stdio: "ignore" });
-                execSync(`pm2 delete ${project.repo}`, { stdio: "ignore" });
+                execSync(`pm2 del ${project.repo}`, { stdio: "ignore" });
               } catch (error) {
                 log(
                   chalk.yellow(
