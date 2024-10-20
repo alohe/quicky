@@ -863,11 +863,6 @@ program
         packageManager = answers.packageManager;
       }
 
-      const spinner = createSpinner(
-        "Saving your GitHub account details and installing dependencies..."
-      ).start();
-      await sleep(1000);
-
       if (username && token) {
         config.github = { username, access_token: token };
         config.packageManager = packageManager;
@@ -902,11 +897,15 @@ program
             await setupWebhookServer();
           }
         } else {
-          log(chalk.yellow("Webhook server is not configured. Setting up..."));
+          log("Webhook server is not configured. Setting up...");
           await setupWebhookServer();
         }
 
         // Check if PM2 is already installed, if not, install it using npm
+        const spinner = createSpinner(
+          "Saving your GitHub account details and installing dependencies..."
+        ).start();
+        await sleep(1000);
         try {
           execSync("pm2 -v", { stdio: "ignore" });
           spinner.success({
