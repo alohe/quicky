@@ -106,12 +106,14 @@ const updateProjectsConfig = ({
   owner,
   repo,
   port,
+  webhookId,
 }) => {
   const project = {
     pid,
     owner,
     repo,
     port,
+    webhookId,
     last_updated: new Date().toISOString(),
   };
   const existing = config.projects.find((p) => p.repo === repo);
@@ -873,7 +875,7 @@ program
           )}`
         );
 
-        // ask use if they wannt deply a project now
+        // Ask user if they want to deploy a project now
         const { deployNow } = await inquirer.prompt([
           {
             type: "confirm",
@@ -1229,8 +1231,11 @@ program
         stdio: "inherit",
       });
 
-      // Update the configuration file with the new project details
-      updateProjectsConfig({ pid, owner, repo, port });
+      // Set up the webhook for the repository
+      const webhookId = await setupWebhook(`${owner}/${repo}`);
+      
+      // Save the webhook ID to the project configuration
+      updateProjectsConfig({ pid, owner, repo, port, webhookId });
 
       log(`Project deployed successfully on port ${port}`);
     } catch (error) {
@@ -1424,6 +1429,14 @@ program
               }
 
               execSync(`sudo service nginx restart`, { stdio: "inherit" });
+
+              // Remove webhook if it exists
+              if (project.webhookId) {
+                await removeWebhook(
+                  `${project.owner}/${project.repo}`,
+                  project.webhookId
+                );
+              }
 
               saveConfig(config);
             }
