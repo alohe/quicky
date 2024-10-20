@@ -1111,10 +1111,10 @@ program
             },
           ]);
 
-          const logCommand =
+            const logCommand =
             logType === "Output Logs"
-              ? `pm2 logs ${config.webhook.pm2Name} --lines 100`
-              : `pm2 logs ${config.webhook.pm2Name} --err --lines 100`;
+              ? `pm2 logs ${config.webhook.pm2Name} --lines 100 --tail`
+              : `pm2 logs ${config.webhook.pm2Name} --err --lines 100 --tail`;
 
           execSync(logCommand, { stdio: "inherit" });
         } catch (error) {

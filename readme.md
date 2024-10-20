@@ -52,7 +52,11 @@ Quicky requires your GitHub access token and username to interact with your repo
 2. Click **Generate new token**.
 3. Select the required scopes for repository access.
 4. Click **Generate token**.
-5. Copy the token and provide it to Quicky as your GitHub access token which will be stored locally for future use.
+5. Copy the token and provide it to Quicky as your GitHub access token. This token will be stored locally for future use.
+
+To enable Continuous Deployment, Quicky requests a webhook URL for automated deployments. 
+It uses your GitHub token to set up a webhook listener and create webhooks dynamically. 
+You'll need to create a subdomain (e.g., `webhook.example.com`) pointing to your server's IP address. This can be done by adding an `A` DNS record with the IPv4 address of your server.
 
 ### 2. Deploy a Project
 
