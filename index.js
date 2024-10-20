@@ -377,6 +377,9 @@ async function setupWebhookServer() {
   // Clone the webhook repository
   await git.clone(`https://github.com/alohe/quicky-webhook.git`, webhookPath);
 
+  // Install dependencies
+  execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
+
   // Set up the domain using the setupDomain function
   await setupDomain(webhookUrl, availablePort);
 
@@ -868,7 +871,7 @@ program
         config.packageManager = packageManager;
         saveConfig(config);
 
-        // Stop and remove the webhook server if it exists
+        // Check if the webhook server is already running
         if (config.webhook && config.webhook.pm2Name) {
           try {
             const pm2Status = execSync(

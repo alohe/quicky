@@ -1,6 +1,6 @@
 {
   "name": "quicky",
-  "version": "0.0.63",
+  "version": "0.0.64",
   "description": "Quicky is a powerful Node.js CLI that makes server management and deployment a breeze. It's a simple and easy-to-use tool that allows you to manage your servers and deploy your projects with ease.",
   "main": "index.js",
   "type": "module",
