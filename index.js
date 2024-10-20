@@ -382,15 +382,28 @@ async function setupWebhookServer() {
   );
 
   // Start the webhook server with PM2
-  execSync(
-    `pm2 start ${path.join(
-      webhookPath,
-      "index.js"
-    )} --name "quicky-webhook-server"`,
-    {
-      stdio: "inherit",
+  try {
+    execSync(
+      `pm2 start ${path.join(
+        webhookPath,
+        "index.js"
+      )} --name "quicky-webhook-server"`,
+      {
+        stdio: "inherit",
+      }
+    );
+  } catch (error) {
+    if (error.message.includes("Script already launched")) {
+      execSync(
+        `pm2 restart "quicky-webhook-server"`,
+        {
+          stdio: "inherit",
+        }
+      );
+    } else {
+      throw error;
     }
-  );
+  }
 
   // Update the global config.json with the webhook server details
   config.webhook = {
@@ -1233,7 +1246,7 @@ program
 
       // Set up the webhook for the repository
       const webhookId = await setupWebhook(`${owner}/${repo}`);
-      
+
       // Save the webhook ID to the project configuration
       updateProjectsConfig({ pid, owner, repo, port, webhookId });
 
