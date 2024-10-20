@@ -25,6 +25,15 @@ const program = new Command();
 const packagePath = path.resolve(__dirname, "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
 
+function updateCLI() {
+  try {
+    execSync("sudo npm install -g quicky", { stdio: "inherit" });
+    console.log(chalk.green("Quicky has been upgraded to the latest version."));
+  } catch (error) {
+    console.error(chalk.red(`Failed to upgrade Quicky: ${error.message}`));
+  }
+}
+
 async function checkForUpdates() {
   try {
     const latest = await latestVersion("quicky");
@@ -40,22 +49,13 @@ async function checkForUpdates() {
           type: "confirm",
           name: "shouldUpgrade",
           message:
-            "Would you like to update quicky to the latest version? 🔒 Your configurations will be preserved.",
+            "Would you like to update quicky to the latest version? Your configurations will be preserved.",
           default: true,
         },
       ]);
 
       if (shouldUpgrade) {
-        try {
-          execSync("sudo npm install -g quicky", { stdio: "inherit" });
-          console.log(
-            chalk.green("Quicky has been upgraded to the latest version.")
-          );
-        } catch (error) {
-          console.error(
-            chalk.red(`Failed to upgrade Quicky: ${error.message}`)
-          );
-        }
+        updateCLI();
       } else {
         console.log(
           chalk.yellow("You can upgrade later by running 'quicky upgrade'.")
@@ -931,7 +931,6 @@ program
           `\n📁 Configuration files are stored at: ${chalk.green(configPath)}`
         );
         log(`📂 Projects will be stored in: ${chalk.green(projectsDir)}`);
-
         log(
           `\n🚀 You can now deploy your Next.js projects using ${chalk.green(
             "quicky deploy"
@@ -1811,13 +1810,7 @@ program
 
       // Proceed to upgrade
       console.log(chalk.blue("Upgrading Quicky CLI to the latest version..."));
-      execSync("sudo npm install -g quicky", { stdio: "inherit" });
-
-      console.log(
-        chalk.green(
-          `Quicky CLI upgraded successfully to version ${latestVersion}.`
-        )
-      );
+      updateCLI();
     } catch (error) {
       console.error(chalk.red(`Failed to upgrade the CLI: ${error.message}`));
     }
