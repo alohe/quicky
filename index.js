@@ -15,6 +15,8 @@ import { formatDistanceToNow } from "date-fns";
 import latestVersion from "latest-version";
 import semver from "semver";
 import { fileURLToPath } from "url";
+import axios from "axios";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -123,6 +125,495 @@ const updateProjectsConfig = ({
 
   saveConfig(config);
 };
+
+async function setupDomain(domain, port) {
+  // Check if domain is pointing to the server's IP address using dig
+  const checkDomainPointing = async (domain) => {
+    let digResult = "";
+    const spinner = createSpinner(
+      `Checking if ${domain} points to this server...`
+    ).start();
+    while (!digResult) {
+      digResult = execSync(`dig +short ${domain}`).toString().trim();
+      if (!digResult) {
+        spinner.update({
+          text: `Waiting for ${domain} to point to this server...`,
+        });
+        await sleep(30000); // Wait for 30 seconds before checking again
+      }
+    }
+    spinner.success({ text: `${domain} is now pointing to this server.` });
+  };
+
+  await checkDomainPointing(domain);
+
+  const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
+  const nginxSymlinkPath = `/etc/nginx/sites-enabled/${domain}`;
+
+  // Check if the domain already exists in Nginx configuration
+  if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
+    // Check if the domain exists in the config.json
+    const domainExistsInConfig = (config.domains || []).some(
+      (d) => d.domain === domain
+    );
+    if (!domainExistsInConfig) {
+      log(
+        chalk.yellow(
+          `Warning: Domain ${domain} configuration files exist but domain is not in config.json.`
+        )
+      );
+      log(`Overriding the existing configuration files for ${domain}.`);
+    } else {
+      log(chalk.red(`Error: Domain ${domain} already exists.`));
+      log(
+        `Please remove the existing configuration first or choose a different domain.`
+      );
+      log(
+        `You can use the ${chalk.green(
+          "quicky domains"
+        )} command to manage domains.`
+      );
+      return;
+    }
+  }
+
+  let zoneName = `zone_${uuidv4().slice(0, 5)}`;
+  let nginxConfig = `
+    limit_req_zone $binary_remote_addr zone=${zoneName}:10m rate=10r/s;
+
+    server {
+    listen 80;
+    server_name ${domain};
+
+    # Main location block for proxying to the Next.js application
+    location / {
+      # Enable rate limiting to prevent abuse
+      limit_req zone=${zoneName} burst=5 nodelay;
+
+      # Proxy settings for Next.js application
+      proxy_pass http://localhost:${port};
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection 'upgrade';
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-NginX-Proxy true;
+
+      # Optimize buffering and memory limits for large requests
+      proxy_busy_buffers_size 512k;
+      proxy_buffers 4 512k;
+      proxy_buffer_size 256k;
+
+      # Disable buffering for real-time applications (like Next.js with WebSocket)
+      proxy_buffering off;
+      proxy_set_header X-Accel-Buffering no;
+
+      # Caching control headers (prevents caching for dynamic content)
+      add_header Cache-Control no-store;
+
+      # Timeouts and keepalive settings to prevent disruptions
+      proxy_connect_timeout 60s;
+      proxy_send_timeout 60s;
+      proxy_read_timeout 60s;
+      keepalive_timeout 60s;
+
+      # Handle large request bodies if needed
+      client_max_body_size 50M;
+    }
+
+    # Logs for debugging and monitoring
+    access_log /var/log/nginx/${domain}-access.log;
+    error_log /var/log/nginx/${domain}-error.log;
+    }
+
+    # Additional security headers for best practices
+    add_header X-Content-Type-Options "nosniff";
+    add_header X-Frame-Options "DENY";
+    add_header X-XSS-Protection "1; mode=block";
+    add_header Referrer-Policy "no-referrer-when-downgrade";
+    add_header Content-Security-Policy "default-src 'self'; img-src *; media-src * data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:";
+    `;
+
+  // Write Nginx config to the sites-available  and sites-enabled directories
+  const tempFilePath = `/tmp/${domain}.conf`;
+  fs.writeFileSync(tempFilePath, nginxConfig, { mode: 0o644 });
+
+  execSync(`sudo mv ${tempFilePath} ${nginxConfigPath}`, {
+    stdio: "inherit",
+  });
+
+  // Check if the symlink already exists
+  if (!fs.existsSync(nginxSymlinkPath)) {
+    // Create a symlink to the sites-enabled directory
+    execSync(`sudo ln -s ${nginxConfigPath} ${nginxSymlinkPath}`, {
+      stdio: "inherit",
+    });
+  } else {
+    log(chalk.yellow(`Symlink already exists for ${domain}.`));
+  }
+
+  // Restart Nginx to apply the changes
+  execSync(`sudo service nginx restart`, { stdio: "inherit" });
+
+  log(chalk.green(`Nginx configuration created for ${domain}.`));
+
+  if (!config.email) {
+    const { email } = await inquirer.prompt([
+      {
+        type: "input",
+        name: "email",
+        message: "Enter your email address for SSL certificate:",
+        validate: (input) => {
+          const emailRegex = /\S+@\S+\.\S+/;
+          return emailRegex.test(input) ? true : "Please enter a valid email.";
+        },
+      },
+    ]);
+
+    config.email = email;
+    saveConfig(config);
+  }
+
+  // Obtain SSL certificate using Certbot
+  try {
+    execSync("which certbot", { stdio: "ignore" });
+    execSync("which python3-certbot-nginx", { stdio: "ignore" });
+  } catch (error) {
+    execSync("sudo apt install certbot python3-certbot-nginx -y", {
+      stdio: "inherit",
+    });
+  } finally {
+    try {
+      execSync(
+        `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${config.email}`,
+        { stdio: "inherit" }
+      );
+    } catch (error) {
+      console.error(
+        chalk.red(`Failed to obtain SSL certificate: ${error.message}`)
+      );
+      process.exit(1);
+    }
+  }
+
+  log(chalk.green(`SSL certificate obtained and configured for ${domain}.`));
+}
+
+async function setupWebhookServer() {
+  const { webhookUrl } = await inquirer.prompt([
+    {
+      type: "input",
+      name: "webhookUrl",
+      message:
+        "Enter the URL where the webhook will be received (e.g., quicky.example.com):",
+      validate: (input) => {
+        if (input.trim() === "") {
+          return "URL is required.";
+        }
+        if (
+          config.domains &&
+          config.domains.some((d) => d.domain === input.trim())
+        ) {
+          return "This domain is already in use. Please enter a different URL.";
+        }
+        return true;
+      },
+    },
+  ]);
+
+  const isPortInUse = (port) => {
+    return new Promise((resolve) => {
+      const server = net.createServer();
+
+      server.once("error", (err) => {
+        if (err.code === "EADDRINUSE") {
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      });
+
+      server.once("listening", () => {
+        server.close();
+        resolve(false);
+      });
+
+      server.listen(port);
+    });
+  };
+
+  const getRandomPort = () => {
+    return Math.floor(Math.random() * (65535 - 1024 + 1)) + 1024;
+  };
+
+  const getAvailablePort = async () => {
+    let port;
+    do {
+      port = getRandomPort();
+    } while (await isPortInUse(port));
+    return port;
+  };
+
+  const availablePort = await getAvailablePort();
+
+  // Set up the webhook server
+  const git = simpleGit();
+  const webhookPath = `${defaultFolder}/webhook`; // .quicky/webhook
+
+  // Clone the webhook repository
+  await git.clone(`https://github.com/alohe/quicky-webhook.git`, webhookPath);
+
+  // Set up the domain using the setupDomain function
+  await setupDomain(webhookUrl, availablePort);
+
+  // Generate a random secret for securing the webhook
+  const webhookSecret = uuidv4();
+
+  // Add a .env file to the webhook server
+  const envFilePath = `${webhookPath}/.env`;
+  fs.writeFileSync(
+    envFilePath,
+    `WEBHOOK_URL=${webhookUrl}\nWEBHOOK_PORT=${availablePort}\nWEBHOOK_SECRET=${webhookSecret}`,
+    { flag: "wx" }
+  );
+
+  // Start the webhook server with PM2
+  execSync(
+    `pm2 start ${path.join(
+      webhookPath,
+      "index.js"
+    )} --name "quicky-webhook-server"`,
+    {
+      stdio: "inherit",
+    }
+  );
+
+  // Update the global config.json with the webhook server details
+  config.webhook = {
+    webhookUrl: `https://${webhookUrl}/webhook`,
+    webhookPort: availablePort,
+    secret: webhookSecret,
+    pm2Name: "quicky-webhook-server",
+  };
+  saveConfig(config);
+
+  log(
+    chalk.green(
+      `Webhook server set up and running at https://${webhookUrl}/webhook`
+    )
+  );
+}
+
+// Function to set up a webhook on a repository to be used during deployment
+async function setupWebhook(repo) {
+  // check if the webhook config is already set up in the config file
+  if (
+    !config.webhook ||
+    !config.webhook.webhookUrl ||
+    !config.webhook.webhookPort ||
+    !config.webhook.secret
+  ) {
+    log(
+      chalk.yellow(
+        "Webhook server is not fully configured. Please set up the webhook server first."
+      )
+    );
+
+    const { confirmWebhookSetup } = await inquirer.prompt([
+      {
+        type: "confirm",
+        name: "setupWebhookServer",
+        message: "Do you want to set up the webhook server now?",
+        default: true,
+      },
+    ]);
+
+    if (confirmWebhookSetup) {
+      await setupWebhookServer();
+    } else {
+      log(chalk.yellow("Operation cancelled."));
+      return;
+    }
+  }
+
+  const webhookConfig = {
+    name: "web",
+    active: true,
+    events: ["push"], // Listen for push events
+    config: {
+      url: config.webhook.webhookUrl, // User’s local service URL
+      content_type: "json",
+      secret: config.webhook.secret, // Add the secret for securing the webhook
+    },
+  };
+
+  // Create the webhook on the user's repository
+  try {
+    const response = await axios.post(
+      `https://api.github.com/repos/${repo}/hooks`,
+      webhookConfig,
+      {
+        headers: {
+          Authorization: `Bearer ${config.github.access_token}`,
+        },
+      }
+    );
+    console.log(`Webhook created: ${response.data.id}`);
+    return response.data.id; // Return the webhook ID
+  } catch (error) {
+    console.error(`Error creating webhook: ${error.message}`);
+    return null; // Return null if there was an error
+  }
+}
+
+// Function to remove a webhook from a repo to be used during project deletion
+async function removeWebhook(repo, webhookId) {
+  try {
+    await axios.delete(
+      `https://api.github.com/repos/${repo}/hooks/${webhookId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.github.access_token}`,
+        },
+      }
+    );
+    console.log(`Webhook ${webhookId} removed.`);
+    return true;
+  } catch (error) {
+    console.error(`Error removing webhook: ${error.message}`);
+    return false;
+  }
+}
+
+// Funtion to update a project with the latest changes from the repository
+async function updateProject(project) {
+  try {
+    const git = simpleGit();
+    const repoPath = `${projectsDir}/${project.repo}`;
+    const tempPath = `${tempDir}/${project.repo}`;
+
+    const spinner = createSpinner("Updating the project...").start();
+    await sleep(1000);
+
+    try {
+      // Clone into temporary directory
+      spinner.update({ text: "Cloning the repository..." });
+      // Ensure the tempPath directory exists
+      fs.ensureDirSync(tempPath);
+
+      await git.clone(
+        `https://${config.github.access_token}@github.com/${project.owner}/${project.repo}.git`,
+        tempPath
+      );
+
+      spinner.update({ text: "Copying files to project directory..." });
+      execSync(`cp -r ${tempPath}/* ${repoPath}`, {
+        stdio: "inherit",
+      });
+
+      await sleep(1000);
+      spinner.update({ text: "Cleaning up temporary files..." });
+      execSync(`rm -rf ${tempPath}`);
+      spinner.success({ text: "Repository updated successfully." });
+      await sleep(1000);
+
+      // update .env file if it exists
+      const envFilePath = `${repoPath}/.env`;
+      if (fs.existsSync(envFilePath)) {
+        const { updateEnv } = await inquirer.prompt([
+          {
+            type: "confirm",
+            name: "updateEnv",
+            message: `Do you want to update the .env file for ${project.repo}?`,
+            default: false,
+          },
+        ]);
+
+        if (updateEnv) {
+          execSync(`nano ${envFilePath}`, { stdio: "inherit" });
+        }
+      } else {
+        // prompt if user wants to add a .env file
+        const { addEnv } = await inquirer.prompt([
+          {
+            type: "confirm",
+            name: "addEnv",
+            message: `Do you want to add a .env file for ${project.repo}?`,
+            default: false,
+          },
+        ]);
+
+        if (addEnv) {
+          fs.writeFileSync(
+            envFilePath,
+            "# Add your environment variables below\n",
+            { flag: "wx" }
+          );
+          execSync(`nano ${envFilePath}`, { stdio: "inherit" });
+        }
+      }
+
+      // Install dependencies, build the project, and restart the PM2 instance
+      const packageManager = config.packageManager || "npm";
+      const installCommand =
+        packageManager === "bun" ? "bun install" : "npm install";
+      execSync(`cd ${repoPath} && ${installCommand}`, {
+        stdio: "inherit",
+      });
+
+      await sleep(1000);
+      spinner.update({ text: " Building the project...\n" });
+      const buildCommand =
+        packageManager === "bun" ? "bun run build" : "npm run build";
+      execSync(`cd ${repoPath} && ${buildCommand}`, {
+        stdio: "inherit",
+      });
+
+      await sleep(1000);
+      spinner.update({ text: " Restarting the project..." });
+
+      // Check if the PM2 instance exists
+      try {
+        execSync(`cd ${repoPath} && pm2 describe ${project.repo}`, {
+          stdio: "ignore",
+        });
+        // If it exists, restart
+        execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
+          stdio: "inherit",
+        });
+      } catch (error) {
+        // If it doesn't exist, start it on its port
+        execSync(
+          `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`,
+          {
+            stdio: "inherit",
+          }
+        );
+      }
+
+      // Update the last_updated timestamp
+      project.last_updated = new Date().toISOString();
+
+      saveConfig(config);
+
+      spinner.success({
+        text: ` Project ${chalk.green.bold(
+          project.repo
+        )} updated successfully.`,
+      });
+    } catch (error) {
+      spinner.error({
+        text: `Failed to update project: ${error.message}`,
+      });
+    }
+
+    process.exit(0);
+  } catch (error) {
+    console.error(chalk.red(`Error: ${error.message}`));
+  }
+}
 
 function help() {
   const rabbit = `
@@ -372,6 +863,9 @@ program
           `\n📁 Configuration files are stored at: ${chalk.green(configPath)}`
         );
         log(`📂 Projects will be stored in: ${chalk.green(projectsDir)}`);
+
+        // setup webhook server
+        await setupWebhookServer();
 
         log(
           `\n🚀 You can now deploy your Next.js projects using ${chalk.green(
@@ -855,130 +1349,7 @@ program
 
       if (action === "update") {
         // Update a running project with the latest changes from the GitHub repository
-        try {
-          const git = simpleGit();
-          const repoPath = `${projectsDir}/${project.repo}`;
-          const tempPath = `${tempDir}/${project.repo}`;
-
-          const spinner = createSpinner("Updating the project...").start();
-          await sleep(1000);
-
-          try {
-            // Clone into temporary directory
-            spinner.update({ text: "Cloning the repository..." });
-            // Ensure the tempPath directory exists
-            fs.ensureDirSync(tempPath);
-
-            await git.clone(
-              `https://${config.github.access_token}@github.com/${project.owner}/${project.repo}.git`,
-              tempPath
-            );
-
-            spinner.update({ text: "Copying files to project directory..." });
-            execSync(`cp -r ${tempPath}/* ${repoPath}`, {
-              stdio: "inherit",
-            });
-
-            await sleep(1000);
-            spinner.update({ text: "Cleaning up temporary files..." });
-            execSync(`rm -rf ${tempPath}`);
-            spinner.success({ text: "Repository updated successfully." });
-            await sleep(1000);
-
-            // update .env file if it exists
-            const envFilePath = `${repoPath}/.env`;
-            if (fs.existsSync(envFilePath)) {
-              const { updateEnv } = await inquirer.prompt([
-                {
-                  type: "confirm",
-                  name: "updateEnv",
-                  message: `Do you want to update the .env file for ${project.repo}?`,
-                  default: false,
-                },
-              ]);
-
-              if (updateEnv) {
-                execSync(`nano ${envFilePath}`, { stdio: "inherit" });
-              }
-            } else {
-              // prompt if user wants to add a .env file
-              const { addEnv } = await inquirer.prompt([
-                {
-                  type: "confirm",
-                  name: "addEnv",
-                  message: `Do you want to add a .env file for ${project.repo}?`,
-                  default: false,
-                },
-              ]);
-
-              if (addEnv) {
-                fs.writeFileSync(
-                  envFilePath,
-                  "# Add your environment variables below\n",
-                  { flag: "wx" }
-                );
-                execSync(`nano ${envFilePath}`, { stdio: "inherit" });
-              }
-            }
-
-            // Install dependencies, build the project, and restart the PM2 instance
-            const packageManager = config.packageManager || "npm";
-            const installCommand =
-              packageManager === "bun" ? "bun install" : "npm install";
-            execSync(`cd ${repoPath} && ${installCommand}`, {
-              stdio: "inherit",
-            });
-
-            await sleep(1000);
-            spinner.update({ text: " Building the project...\n" });
-            const buildCommand =
-              packageManager === "bun" ? "bun run build" : "npm run build";
-            execSync(`cd ${repoPath} && ${buildCommand}`, {
-              stdio: "inherit",
-            });
-
-            await sleep(1000);
-            spinner.update({ text: " Restarting the project..." });
-
-            // Check if the PM2 instance exists
-            try {
-              execSync(`cd ${repoPath} && pm2 describe ${project.repo}`, {
-                stdio: "ignore",
-              });
-              // If it exists, restart
-              execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
-                stdio: "inherit",
-              });
-            } catch (error) {
-              // If it doesn't exist, start it on its port
-              execSync(
-                `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`,
-                {
-                  stdio: "inherit",
-                }
-              );
-            }
-
-            // Update the last_updated timestamp
-            project.last_updated = new Date().toISOString();
-
-            saveConfig(config);
-
-            spinner.success({
-              text: ` Project ${chalk.green.bold(
-                project.repo
-              )} updated successfully.`,
-            });
-          } catch (error) {
-            spinner.error({
-              text: `Failed to update project: ${error.message}`,
-            });
-          }
-
-          process.exit(0);
-        } catch (error) {
-          console.error(chalk.red(`Error: ${error.message}`));
-        }
+        updateProject(project);
       } else if (action === "delete") {
         try {
           if (!config.projects.length) {
@@ -1088,6 +1459,26 @@ program
     }
   });
 
+program
+  .command("update <pid>")
+  .description("Update a project by its PID")
+  .action(async (pid) => {
+    try {
+      const project = config.projects.find((p) => p.pid === pid);
+      if (!project) {
+        console.error(chalk.red(`Project with PID ${pid} not found.`));
+        process.exit(1);
+      }
+
+      await updateProject(project);
+
+      process.exit(0);
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
 // Manage domains and subdomains for the projects
 program
   .command("domains")
@@ -1175,180 +1566,8 @@ async function handleAddDomain(projects) {
       return;
     }
 
-    // Check if domain is pointing to the server's IP address using dig
-    const checkDomainPointing = async (domain) => {
-      let digResult = "";
-      const spinner = createSpinner(
-        `Checking if ${domain} points to this server...`
-      ).start();
-      while (!digResult) {
-        digResult = execSync(`dig +short ${domain}`).toString().trim();
-        if (!digResult) {
-          spinner.update({
-            text: `Waiting for ${domain} to point to this server...`,
-          });
-          await sleep(30000); // Wait for 30 seconds before checking again
-        }
-      }
-      spinner.success({ text: `${domain} is now pointing to this server.` });
-    };
-
-    await checkDomainPointing(domain);
-
-    const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
-    const nginxSymlinkPath = `/etc/nginx/sites-enabled/${domain}`;
-
-    // Check if the domain already exists in Nginx configuration
-    if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
-      // Check if the domain exists in the config.json
-      const domainExistsInConfig = (config.domains || []).some(
-        (d) => d.domain === domain
-      );
-      if (!domainExistsInConfig) {
-        log(
-          chalk.yellow(
-            `Warning: Domain ${domain} configuration files exist but domain is not in config.json.`
-          )
-        );
-        log(`Overriding the existing configuration files for ${domain}.`);
-      } else {
-        log(chalk.red(`Error: Domain ${domain} already exists.`));
-        log(
-          `Please remove the existing configuration first or choose a different domain.`
-        );
-        log(
-          `You can use the ${chalk.green(
-            "quicky domains"
-          )} command to manage domains.`
-        );
-        return;
-      }
-    }
-
-    let zoneName = `zone_${uuidv4().slice(0, 5)}`;
-    let nginxConfig = `
-    limit_req_zone $binary_remote_addr zone=${zoneName}:10m rate=10r/s;
-
-    server {
-    listen 80;
-    server_name ${domain};
-
-    # Main location block for proxying to the Next.js application
-    location / {
-      # Enable rate limiting to prevent abuse
-      limit_req zone=${zoneName} burst=5 nodelay;
-
-      # Proxy settings for Next.js application
-      proxy_pass http://localhost:${selectedProject.port};
-      proxy_http_version 1.1;
-      proxy_set_header Upgrade $http_upgrade;
-      proxy_set_header Connection 'upgrade';
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
-      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      proxy_set_header X-NginX-Proxy true;
-
-      # Optimize buffering and memory limits for large requests
-      proxy_busy_buffers_size 512k;
-      proxy_buffers 4 512k;
-      proxy_buffer_size 256k;
-
-      # Disable buffering for real-time applications (like Next.js with WebSocket)
-      proxy_buffering off;
-      proxy_set_header X-Accel-Buffering no;
-
-      # Caching control headers (prevents caching for dynamic content)
-      add_header Cache-Control no-store;
-
-      # Timeouts and keepalive settings to prevent disruptions
-      proxy_connect_timeout 60s;
-      proxy_send_timeout 60s;
-      proxy_read_timeout 60s;
-      keepalive_timeout 60s;
-
-      # Handle large request bodies if needed
-      client_max_body_size 50M;
-    }
-
-    # Logs for debugging and monitoring
-    access_log /var/log/nginx/${domain}-access.log;
-    error_log /var/log/nginx/${domain}-error.log;
-    }
-
-    # Additional security headers for best practices
-    add_header X-Content-Type-Options "nosniff";
-    add_header X-Frame-Options "DENY";
-    add_header X-XSS-Protection "1; mode=block";
-    add_header Referrer-Policy "no-referrer-when-downgrade";
-    add_header Content-Security-Policy "default-src 'self'; img-src *; media-src * data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:";
-    `;
-
-    // Write Nginx config to the sites-available  and sites-enabled directories
-    const tempFilePath = `/tmp/${domain}.conf`;
-    fs.writeFileSync(tempFilePath, nginxConfig, { mode: 0o644 });
-
-    execSync(`sudo mv ${tempFilePath} ${nginxConfigPath}`, {
-      stdio: "inherit",
-    });
-
-    // Check if the symlink already exists
-    if (!fs.existsSync(nginxSymlinkPath)) {
-      // Create a symlink to the sites-enabled directory
-      execSync(`sudo ln -s ${nginxConfigPath} ${nginxSymlinkPath}`, {
-        stdio: "inherit",
-      });
-    } else {
-      log(chalk.yellow(`Symlink already exists for ${domain}.`));
-    }
-
-    // Restart Nginx to apply the changes
-    execSync(`sudo service nginx restart`, { stdio: "inherit" });
-
-    log(chalk.green(`Nginx configuration created for ${domain}.`));
-
-    if (!config.email) {
-      const { email } = await inquirer.prompt([
-        {
-          type: "input",
-          name: "email",
-          message: "Enter your email address for SSL certificate:",
-          validate: (input) => {
-            const emailRegex = /\S+@\S+\.\S+/;
-            return emailRegex.test(input)
-              ? true
-              : "Please enter a valid email.";
-          },
-        },
-      ]);
-
-      config.email = email;
-      saveConfig(config);
-    }
-
-    // Obtain SSL certificate using Certbot
-    try {
-      execSync("which certbot", { stdio: "ignore" });
-      execSync("which python3-certbot-nginx", { stdio: "ignore" });
-    } catch (error) {
-      execSync("sudo apt install certbot python3-certbot-nginx -y", {
-        stdio: "inherit",
-      });
-    } finally {
-      try {
-        execSync(
-          `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${config.email}`,
-          { stdio: "inherit" }
-        );
-      } catch (error) {
-        console.error(
-          chalk.red(`Failed to obtain SSL certificate: ${error.message}`)
-        );
-        process.exit(1);
-      }
-    }
-
-    log(chalk.green(`SSL certificate obtained and configured for ${domain}.`));
+    // a function for domain setup
+    await setupDomain(domain, selectedProject.port);
 
     // Update the config file with the new domain
     const projectPid = selectedProject.pid;
