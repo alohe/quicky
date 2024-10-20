@@ -366,7 +366,11 @@ async function setupWebhookServer() {
 
   // Check if the webhook directory already exists and is not empty
   if (fs.existsSync(webhookPath) && fs.readdirSync(webhookPath).length > 0) {
-    log(chalk.yellow(`Directory ${webhookPath} already exists and is not empty. Deleting...`));
+    log(
+      chalk.yellow(
+        `Directory ${webhookPath} already exists and is not empty. Deleting...`
+      )
+    );
     fs.removeSync(webhookPath);
   }
 
@@ -400,12 +404,9 @@ async function setupWebhookServer() {
     );
   } catch (error) {
     if (error.message.includes("Script already launched")) {
-      execSync(
-        `pm2 restart "quicky-webhook-server"`,
-        {
-          stdio: "inherit",
-        }
-      );
+      execSync(`pm2 restart "quicky-webhook-server"`, {
+        stdio: "inherit",
+      });
     } else {
       throw error;
     }
@@ -757,6 +758,17 @@ program
               stdio: "inherit",
             });
           });
+
+          // Stop and delete the webhook server if it exists
+          if (config.webhook && config.webhook.pm2Name) {
+            execSync(
+              `pm2 stop ${config.webhook.pm2Name} && pm2 delete ${config.webhook.pm2Name}`,
+              {
+                stdio: "inherit",
+              }
+            );
+          }
+
           log(
             chalk.green(
               "All PM2 instances managed by Quicky have been stopped and deleted."
@@ -860,6 +872,39 @@ program
         config.github = { username, access_token: token };
         config.packageManager = packageManager;
         saveConfig(config);
+
+        // Stop and remove the webhook server if it exists
+        if (config.webhook && config.webhook.pm2Name) {
+          try {
+            const pm2Status = execSync(
+              `pm2 describe ${config.webhook.pm2Name}`,
+              {
+                stdio: "pipe",
+              }
+            ).toString();
+
+            if (!pm2Status.includes("online")) {
+              log(chalk.yellow("Webhook server is not running. Restarting..."));
+              execSync(`pm2 restart ${config.webhook.pm2Name}`, {
+                stdio: "inherit",
+              });
+              log(chalk.green("Webhook server restarted successfully."));
+            } else {
+              log(chalk.green("Webhook server is already running."));
+            }
+          } catch (error) {
+            log(
+              chalk.red(
+                `Failed to check or restart webhook server: ${error.message}`
+              )
+            );
+            log(chalk.yellow("Attempting to start webhook server..."));
+            await setupWebhookServer();
+          }
+        } else {
+          log(chalk.yellow("Webhook server is not configured. Setting up..."));
+          await setupWebhookServer();
+        }
 
         // Check if PM2 is already installed, if not, install it using npm
         try {
