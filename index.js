@@ -740,9 +740,19 @@ function help() {
     )}    Start, stop, restart, update, or delete a project \n`
   );
   log(
+    `  ${chalk.blue.bold(
+      "update"
+    )}    Update a project by its PID, primarily used by the webhook server\n`
+  );
+  log(
     `  ${chalk.cyanBright.bold(
       "domains"
     )}   Manage domains and subdomains for the projects`
+  );
+  log(
+    `  ${chalk.cyanBright.bold(
+      "webhooks"
+    )}  Manage the webhook server for your projects`
   );
   log("");
   log(`  ${chalk.hex("#fe64fa").bold("install")}   Install quicky globally`);
@@ -1023,39 +1033,93 @@ program
 program
   .command("webhooks")
   .description("Manage the webhook server for your projects")
-  .option("--restart", "Restart the webhook server")
-  .option("--status", "Check the status of the webhook server")
-  .action(async (cmd) => {
+  .action(async () => {
     const webhookPath = `${defaultFolder}/webhook`;
 
-    if (cmd.restart) {
-      try {
-        // Check if node_modules exists, if not run npm install
-        if (!fs.existsSync(`${webhookPath}/node_modules`)) {
-          log(chalk.yellow("node_modules not found. Running npm install..."));
-          execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
-        }
-
-        execSync(`pm2 restart ${config.webhook.pm2Name}`, { stdio: "inherit" });
-        log(chalk.green("Webhook server restarted successfully."));
-      } catch (error) {
-        log(chalk.red(`Failed to restart webhook server: ${error.message}`));
-      }
-    } else if (cmd.status) {
+    const isWebhookServerRunning = () => {
       try {
         const pm2Status = execSync(`pm2 describe ${config.webhook.pm2Name}`, {
           stdio: "pipe",
         }).toString();
-
-        if (pm2Status.includes("online")) {
-          log(chalk.green("Webhook server is running."));
-        } else {
-          log(chalk.red("Webhook server is not running."));
-        }
+        return pm2Status.includes("online");
       } catch (error) {
-        log(
-          chalk.red(`Failed to check webhook server status: ${error.message}`)
-        );
+        return false;
+      }
+    };
+
+    if (isWebhookServerRunning()) {
+      const { action } = await inquirer.prompt([
+        {
+          type: "list",
+          name: "action",
+          message: "Webhook server is running. What would you like to do?",
+          choices: ["Restart", "Check Status", "Stop", "Show Logs"],
+        },
+      ]);
+
+      if (action === "Restart") {
+        try {
+          // Check if node_modules exists, if not run npm install
+          if (!fs.existsSync(`${webhookPath}/node_modules`)) {
+            log(chalk.yellow("node_modules not found. Running npm install..."));
+            execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
+          }
+
+          execSync(`pm2 restart ${config.webhook.pm2Name}`, {
+            stdio: "inherit",
+          });
+          log(chalk.green("Webhook server restarted successfully."));
+        } catch (error) {
+          log(chalk.red(`Failed to restart webhook server: ${error.message}`));
+        }
+      } else if (action === "Check Status") {
+        try {
+          const pm2Status = execSync(
+            `pm2 describe ${config.webhook.pm2Name}`,
+            {
+              stdio: "pipe",
+            }
+          ).toString();
+
+          if (pm2Status.includes("online")) {
+            log(chalk.green("Webhook server is running."));
+          } else {
+            log(chalk.red("Webhook server is not running."));
+          }
+        } catch (error) {
+          log(
+            chalk.red(`Failed to check webhook server status: ${error.message}`)
+          );
+        }
+      } else if (action === "Stop") {
+        try {
+          execSync(`pm2 stop ${config.webhook.pm2Name}`, {
+            stdio: "inherit",
+          });
+          log(chalk.green("Webhook server stopped successfully."));
+        } catch (error) {
+          log(chalk.red(`Failed to stop webhook server: ${error.message}`));
+        }
+      } else if (action === "Show Logs") {
+        try {
+          const { logType } = await inquirer.prompt([
+            {
+              type: "list",
+              name: "logType",
+              message: "Which logs would you like to see?",
+              choices: ["Output Logs", "Error Logs"],
+            },
+          ]);
+
+          const logCommand =
+            logType === "Output Logs"
+              ? `pm2 logs ${config.webhook.pm2Name} --lines 100`
+              : `pm2 logs ${config.webhook.pm2Name} --err --lines 100`;
+
+          execSync(logCommand, { stdio: "inherit" });
+        } catch (error) {
+          log(chalk.red(`Failed to show logs: ${error.message}`));
+        }
       }
     } else {
       await setupWebhookServer();

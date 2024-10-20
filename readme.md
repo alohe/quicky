@@ -1,22 +1,18 @@
-# Quicky
+# Quicky CLI
 
 A CLI tool that streamlines the deployment and management of self-hosted Next.js projects, enabling initialization, deployment from GitHub, updating, deleting, and managing applications, along with effortless setup of domains and SSL certificates, simplifying the entire lifecycle of Next.js apps on remote servers.
 
 ## Features
 
 - 🐙 **GitHub Integration**: Initialize, deploy, and manage Next.js projects from private and public GitHub repositories.
-
 - ⚙️ **Process Management**: Leverage PM2 for application lifecycle and monitoring.
-
 - 🔄 **Project Maintenance**: Easily update or remove deployed projects.
-
 - 🌐 **Domain & SSL Automation**: Automatically configure Nginx for custom domains and SSL certificates, allowing you to add/remove domains from your projects.
-
 - 📝 **Configuration Overview**: List and inspect details of all deployed projects and their domains.
 
 ## Prerequisites
 
-To install Quicky, first acquire a Linux Ubuntu server from a provider such as  [DigitalOcean](https://m.do.co/c/9b7ccf30c0bd) or [Hetzner](https://www.hetzner.com/cloud/).
+To install Quicky, first acquire a Linux Ubuntu server from a provider such as [DigitalOcean](https://m.do.co/c/9b7ccf30c0bd) or [Hetzner](https://www.hetzner.com/cloud/).
 
 After setting up your server, connect to it (e.g., via SSH) and install Node.js and npm by executing the following commands:
 
@@ -80,7 +76,16 @@ quicky manage
 
 Lists all deployed projects and allows you to **start**, **stop**, **restart**, **update**, or **delete** a specific project.
 
-### 4. Configuration Overview
+### 4. Update a Project by PID
+
+```bash
+quicky update <pid>
+```
+
+Updates a specific project by its PID with the latest changes from the GitHub repository.
+
+
+### 5. Configuration Overview
 
 ```bash
 quicky list
@@ -95,7 +100,7 @@ Displays an overview of all deployed projects, including the following details:
 - **PM2 Status**: Current status of the PM2 process.
 - **Last updated**: Date and time of the last deployment/update.
 
-### 5. Domains
+### 6. Domains
 
 Before adding a domain to your project, you need to:
 
@@ -110,7 +115,15 @@ quicky domains
 
 This command allows you to effortlessly **add** and **remove** domains and subdomains for your projects.
 
-### 6. Upgrade Quicky
+### 7. Webhooks
+
+```bash
+quicky webhooks
+```
+
+This command allows you to manage the webhook server for your projects. You can **restart** the webhook server, check its **status**, **stop** it, or **show logs**.
+
+### 8. Upgrade Quicky
 
 ```bash
 quicky upgrade
@@ -118,7 +131,7 @@ quicky upgrade
 
 Upgrades Quicky to the latest version.
 
-### 8. Uninstall Quicky
+### 9. Uninstall Quicky
 
 ```bash
 quicky uninstall
@@ -128,7 +141,7 @@ Removes Quicky from your system.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [`LICENSE`](LICENSE) file for details.
 
 ## Author
 
@@ -138,4 +151,4 @@ Feel free to reach out to me on 𝕏 [@alemalohe](https://x.com/alemalohe) if yo
 
 ## Contributing
 
-Contributions are welcome! Please read the [CONTRIBUTING](CONTRIBUTING.md) file for guidelines on how to get started.
+Contributions are welcome! Please read the CONTRIBUTING file for guidelines on how to get started.
