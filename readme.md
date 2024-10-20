@@ -118,7 +118,7 @@ quicky upgrade
 
 Upgrades Quicky to the latest version.
 
-### 8. Uninstall Quicky
+### 7. Uninstall Quicky
 
 ```bash
 quicky uninstall
