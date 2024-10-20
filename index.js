@@ -393,9 +393,8 @@ async function setupWebhookServer() {
     `WEBHOOK_URL=${webhookUrl}\nWEBHOOK_PORT=${availablePort}\nWEBHOOK_SECRET=${webhookSecret}`,
     { flag: "wx" }
   );
-
-  // Start the webhook server with PM2
   try {
+    // Start the webhook server with PM2
     execSync(
       `pm2 start ${path.join(
         webhookPath,
@@ -407,11 +406,21 @@ async function setupWebhookServer() {
     );
   } catch (error) {
     if (error.message.includes("Script already launched")) {
-      execSync(`pm2 restart "quicky-webhook-server"`, {
-        stdio: "inherit",
-      });
+      // If the script is already running, attempt to restart it
+      try {
+        execSync(`pm2 restart "quicky-webhook-server"`, {
+          stdio: "inherit",
+        });
+      } catch (restartError) {
+        console.error(
+          "Failed to restart the webhook server:",
+          restartError.message
+        );
+        throw restartError; // Re-throw the error after logging
+      }
     } else {
-      throw error;
+      console.error("Failed to start the webhook server:", error.message);
+      throw error; // Re-throw the error after logging
     }
   }
 
@@ -998,7 +1007,9 @@ program
           log(chalk.red("Webhook server is not running."));
         }
       } catch (error) {
-        log(chalk.red(`Failed to check webhook server status: ${error.message}`));
+        log(
+          chalk.red(`Failed to check webhook server status: ${error.message}`)
+        );
       }
     } else {
       await setupWebhookServer();
