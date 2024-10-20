@@ -569,7 +569,7 @@ async function removeWebhook(repo, webhookId) {
 }
 
 // Funtion to update a project with the latest changes from the repository
-async function updateProject(project) {
+async function updateProject(project, promptEnv = false) {
   try {
     const git = simpleGit();
     const repoPath = `${projectsDir}/${project.repo}`;
@@ -600,39 +600,41 @@ async function updateProject(project) {
       spinner.success({ text: "Repository updated successfully." });
       await sleep(1000);
 
-      // update .env file if it exists
-      const envFilePath = `${repoPath}/.env`;
-      if (fs.existsSync(envFilePath)) {
-        const { updateEnv } = await inquirer.prompt([
-          {
-            type: "confirm",
-            name: "updateEnv",
-            message: `Do you want to update the .env file for ${project.repo}?`,
-            default: false,
-          },
-        ]);
+      if (promptEnv) {
+        // update .env file if it exists
+        const envFilePath = `${repoPath}/.env`;
+        if (fs.existsSync(envFilePath)) {
+          const { updateEnv } = await inquirer.prompt([
+            {
+              type: "confirm",
+              name: "updateEnv",
+              message: `Do you want to update the .env file for ${project.repo}?`,
+              default: false,
+            },
+          ]);
 
-        if (updateEnv) {
-          execSync(`nano ${envFilePath}`, { stdio: "inherit" });
-        }
-      } else {
-        // prompt if user wants to add a .env file
-        const { addEnv } = await inquirer.prompt([
-          {
-            type: "confirm",
-            name: "addEnv",
-            message: `Do you want to add a .env file for ${project.repo}?`,
-            default: false,
-          },
-        ]);
+          if (updateEnv) {
+            execSync(`nano ${envFilePath}`, { stdio: "inherit" });
+          }
+        } else {
+          // prompt if user wants to add a .env file
+          const { addEnv } = await inquirer.prompt([
+            {
+              type: "confirm",
+              name: "addEnv",
+              message: `Do you want to add a .env file for ${project.repo}?`,
+              default: false,
+            },
+          ]);
 
-        if (addEnv) {
-          fs.writeFileSync(
-            envFilePath,
-            "# Add your environment variables below\n",
-            { flag: "wx" }
-          );
-          execSync(`nano ${envFilePath}`, { stdio: "inherit" });
+          if (addEnv) {
+            fs.writeFileSync(
+              envFilePath,
+              "# Add your environment variables below\n",
+              { flag: "wx" }
+            );
+            execSync(`nano ${envFilePath}`, { stdio: "inherit" });
+          }
         }
       }
 
@@ -1512,7 +1514,7 @@ program
 
       if (action === "update") {
         // Update a running project with the latest changes from the GitHub repository
-        updateProject(project);
+        updateProject(project, true);
       } else if (action === "delete") {
         try {
           if (!config.projects.length) {
@@ -1641,7 +1643,7 @@ program
         process.exit(1);
       }
 
-      await updateProject(project);
+      await updateProject(project, false);
 
       process.exit(0);
     } catch (error) {
