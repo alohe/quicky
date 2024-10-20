@@ -371,6 +371,19 @@ async function setupWebhookServer() {
         `Directory ${webhookPath} already exists and is not empty. Deleting...`
       )
     );
+
+    // Stop and delete the PM2 instance if it exists
+    try {
+      execSync(
+        `pm2 stop quicky-webhook-server && pm2 delete quicky-webhook-server`,
+        {
+          stdio: "inherit",
+        }
+      );
+    } catch (error) {
+      log(chalk.red(`Failed to stop/delete PM2 instance: ${error.message}`));
+    }
+
     fs.removeSync(webhookPath);
   }
 
