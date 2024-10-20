@@ -364,6 +364,12 @@ async function setupWebhookServer() {
   const git = simpleGit();
   const webhookPath = `${defaultFolder}/webhook`; // .quicky/webhook
 
+  // Check if the webhook directory already exists and is not empty
+  if (fs.existsSync(webhookPath) && fs.readdirSync(webhookPath).length > 0) {
+    log(chalk.yellow(`Directory ${webhookPath} already exists and is not empty. Deleting...`));
+    fs.removeSync(webhookPath);
+  }
+
   // Clone the webhook repository
   await git.clone(`https://github.com/alohe/quicky-webhook.git`, webhookPath);
 
