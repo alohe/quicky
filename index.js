@@ -932,9 +932,6 @@ program
         );
         log(`📂 Projects will be stored in: ${chalk.green(projectsDir)}`);
 
-        // setup webhook server
-        await setupWebhookServer();
-
         log(
           `\n🚀 You can now deploy your Next.js projects using ${chalk.green(
             "quicky deploy"
@@ -966,6 +963,14 @@ program
     } catch (error) {
       console.error(chalk.red(`Error: ${error.message}`));
     }
+  });
+
+// Configure webhooks
+program
+  .command("webhooks")
+  .description("Set up a webhook server for your projects")
+  .action(async () => {
+    await setupWebhookServer();
   });
 
 // Deploy project
