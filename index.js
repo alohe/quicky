@@ -967,9 +967,42 @@ program
 // Configure webhooks
 program
   .command("webhooks")
-  .description("Set up a webhook server for your projects")
-  .action(async () => {
-    await setupWebhookServer();
+  .description("Manage the webhook server for your projects")
+  .option("--restart", "Restart the webhook server")
+  .option("--status", "Check the status of the webhook server")
+  .action(async (cmd) => {
+    const webhookPath = `${defaultFolder}/webhook`;
+
+    if (cmd.restart) {
+      try {
+        // Check if node_modules exists, if not run npm install
+        if (!fs.existsSync(`${webhookPath}/node_modules`)) {
+          log(chalk.yellow("node_modules not found. Running npm install..."));
+          execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
+        }
+
+        execSync(`pm2 restart ${config.webhook.pm2Name}`, { stdio: "inherit" });
+        log(chalk.green("Webhook server restarted successfully."));
+      } catch (error) {
+        log(chalk.red(`Failed to restart webhook server: ${error.message}`));
+      }
+    } else if (cmd.status) {
+      try {
+        const pm2Status = execSync(`pm2 describe ${config.webhook.pm2Name}`, {
+          stdio: "pipe",
+        }).toString();
+
+        if (pm2Status.includes("online")) {
+          log(chalk.green("Webhook server is running."));
+        } else {
+          log(chalk.red("Webhook server is not running."));
+        }
+      } catch (error) {
+        log(chalk.red(`Failed to check webhook server status: ${error.message}`));
+      }
+    } else {
+      await setupWebhookServer();
+    }
   });
 
 // Deploy project
