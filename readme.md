@@ -1,10 +1,10 @@
 # Quicky CLI
 
-A CLI tool that streamlines the deployment and management of self-hosted Next.js projects, enabling initialization, deployment from GitHub, updating, deleting, and managing applications, along with effortless setup of domains and SSL certificates, simplifying the entire lifecycle of Next.js apps on remote servers.
+A CLI tool that streamlines the deployment and management of self-hosted Next.js and Node.js projects, enabling initialization, deployment from GitHub, updating, deleting, and managing applications, along with effortless setup of domains and SSL certificates, simplifying the entire lifecycle of web applications on remote servers.
 
 ## Features
 
-- 🐙 **GitHub Integration**: Initialize, deploy, and manage Next.js projects from private and public GitHub repositories.
+- 🐙 **GitHub Integration**: Initialize, deploy, and manage Next.js and Node.js projects from private and public GitHub repositories.
 - ⚙️ **Process Management**: Leverage PM2 for application lifecycle and monitoring.
 - 🔄 **Project Maintenance**: Easily update or remove deployed projects.
 - 🌐 **Domain & SSL Automation**: Automatically configure Nginx for custom domains and SSL certificates, allowing you to add/remove domains from your projects.
@@ -64,13 +64,32 @@ You'll need to create a subdomain (e.g., `webhook.example.com`) pointing to your
 quicky deploy
 ```
 
+Quicky now supports deploying both **Next.js** and **Node.js** projects. During the deployment process, you will be prompted to select the project type:
+
+- **Next.js**
+- **Node.js**
+
+#### Deploying a Next.js Project
+
+Follow the prompts to select your Next.js repository. Quicky will handle the deployment and configuration automatically.
+
+#### Deploying a Node.js Project
+
+Before deploying a Node.js project, ensure that your main application file is named `index.js`. You have the option to specify whether your project will use a port:
+
+- **With Port**: Provide the port number (e.g., 3000). Quicky will save it in the `.env` file, allowing you to point domains to your project.
+- **Without Port**: Without specifying a port, domains cannot be directed to the project, causing it to operate solely as a background service.
+
 This command will prompt you to provide:
 
 - Your GitHub username or any organization name
 - The repository name
-- The port number on which the project should run (e.g., 3000)
+- Project type (**Next.js** or **Node.js**)
+- If **Node.js** is selected:
+  - Whether your project uses a port
+    - If yes, the port number on which the project should run (e.g., 3000)
 
-**Environment Variables** - During deployment, you'll be asked whether you'd like to add environment variables to your project.
+**Environment Variables** - During deployment, you'll be asked whether you'd like to add environment variables to your project. Quicky will handle saving the port number in the `.env` file of your project if applicable.
 
 ### 3. Manage Projects
 

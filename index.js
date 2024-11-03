@@ -568,7 +568,7 @@ async function removeWebhook(repo, webhookId) {
   }
 }
 
-// Funtion to update a project with the latest changes from the repository
+// Function to update a project with the latest changes from the repository
 async function updateProject(project, promptEnv = false) {
   try {
     const git = simpleGit();
@@ -648,14 +648,23 @@ async function updateProject(project, promptEnv = false) {
 
       await sleep(1000);
 
-      // Only build if it's a Next.js project
-      if (project.type === "nextjs") {
-        spinner.update({ text: " Building the project...\n" });
-        const buildCommand =
-          packageManager === "bun" ? "bun run build" : "npm run build";
-        execSync(`cd ${repoPath} && ${buildCommand}`, {
-          stdio: "inherit",
-        });
+      // Check for build script in package.json for both Next.js and Node.js projects
+      try {
+        const packageJson = JSON.parse(fs.readFileSync(`${repoPath}/package.json`, 'utf8'));
+        const hasBuildScript = packageJson.scripts?.build;
+
+        if (hasBuildScript) {
+          spinner.update({ text: " Building the project...\n" });
+          const buildCommand =
+            packageManager === "bun" ? "bun run build" : "npm run build";
+          execSync(`cd ${repoPath} && ${buildCommand}`, {
+            stdio: "inherit",
+          });
+        }
+      } catch (error) {
+        console.error(
+          chalk.yellow(`Warning: Could not read package.json: ${error.message}`)
+        );
       }
 
       await sleep(1000);
