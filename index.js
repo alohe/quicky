@@ -1257,14 +1257,14 @@ program
       };
 
       const getAvailablePort = async (port) => {
-        let newPort;
+        let newPort = port;
 
-        while (await isPortInUse(port)) {
+        while (await isPortInUse(newPort)) {
           const answer = await inquirer.prompt([
             {
               type: "input",
               name: "port",
-              message: `Port ${port} is already in use. Please enter another port:`,
+              message: `Port ${newPort} is already in use. Please enter another port:`,
               validate: (input) => {
                 const portNumber = Number.parseInt(input, 10);
                 return Number.isInteger(portNumber) &&
