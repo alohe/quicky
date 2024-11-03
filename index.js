@@ -49,7 +49,7 @@ async function checkForUpdates() {
           type: "confirm",
           name: "shouldUpgrade",
           message:
-            "Would you like to update quicky to the latest version? Your configurations will be preserved.",
+            " Would you like to update quicky to the latest version? Your configurations will be preserved.",
           default: true,
         },
       ]);
@@ -124,6 +124,7 @@ const updateProjectsConfig = ({
     existing.port = port;
     existing.owner = owner;
     existing.type = type;
+    existing.last_updated = new Date().toISOString();
   } else {
     config.projects.push(project);
   }
@@ -676,16 +677,21 @@ async function updateProject(project, promptEnv = false) {
           stdio: "ignore",
         });
         // If it exists, restart
-        execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
-          stdio: "inherit",
-        });
+        if (project.type.toLowerCase() === "next.js") {
+          execSync(`cd ${repoPath} && pm2 restart ${project.repo} -- --port ${project.port}`, {
+            stdio: "inherit",
+          });
+        } else {
+          execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
+            stdio: "inherit",
+          });
+        }
       } catch (error) {
         // If it doesn't exist, start it on its port
-        const startCommand = project.type === "nextjs"
+        const startCommand = project.type.toLowerCase() === "next.js"
           ? `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`
-          : project.port
-            ? `cd ${repoPath} && PORT=${project.port} pm2 start npm --name "${project.repo}" -- start`
-            : `cd ${repoPath} && pm2 start index.js --name "${project.repo}"`;
+          : port ? `cd ${repoPath} && PORT=${project.port} pm2 start npm --name "${project.repo}" -- start`
+          : `cd ${repoPath} && pm2 start index.js --name "${project.repo}"`;
         execSync(startCommand, {
           stdio: "inherit",
         });
@@ -1440,7 +1446,7 @@ program
 
       const installCommand = packageManager === "bun" ? "bun install" : "npm install";
       const buildCommand = packageManager === "bun" ? "bun run build" : "npm run build";
-      const startCommand = projectType === "Next.js" ?
+      const startCommand = projectType.toLowerCase() === "next.js" ?
         `pm2 start npm --name "${repo}" -- start -- --port ${port}` :
         port ? `pm2 start npm --name "${repo}" -- start -- --port ${port}` : `pm2 start index.js --name "${repo}"`;
 
