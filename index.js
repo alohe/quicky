@@ -524,7 +524,7 @@ async function setupWebhook(repo) {
     active: true,
     events: ["push"], // Listen for push events
     config: {
-      url: config.webhook.webhookUrl, // User’s local service URL
+      url: config.webhook.webhookUrl, // User's local service URL
       content_type: "json",
       secret: config.webhook.secret, // Add the secret for securing the webhook
     },
@@ -674,7 +674,9 @@ async function updateProject(project, promptEnv = false) {
         // If it doesn't exist, start it on its port
         const startCommand = project.type === "nextjs"
           ? `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`
-          : `cd ${repoPath} && PORT=${project.port} pm2 start npm --name "${project.repo}" -- start`;
+          : project.port
+            ? `cd ${repoPath} && PORT=${project.port} pm2 start npm --name "${project.repo}" -- start`
+            : `cd ${repoPath} && pm2 start index.js --name "${project.repo}"`;
         execSync(startCommand, {
           stdio: "inherit",
         });
@@ -1133,7 +1135,7 @@ program
 // Deploy project
 program
   .command("deploy")
-  .description("Deploy a Next.js project from GitHub")
+  .description("Deploy a Next.js or Node.js project from GitHub")
   .option("--owner <owner>", "GitHub repository owner")
   .option("--repo <repo>", "GitHub repository name")
   .option("--port <port>", "Port to deploy the application")
@@ -1145,48 +1147,59 @@ program
       if (config.github?.username) {
         defaultOwner = owner || config.github.username;
       }
-      if (!repo || !port) {
-        const answers = await inquirer.prompt([
-          {
-            type: "input",
-            name: "owner",
-            message: "Enter the GitHub repository owner/org name:",
-            default: defaultOwner,
-            when: () => !owner,
-          },
-          {
-            type: "input",
-            name: "repo",
-            message: "Enter the GitHub repository name:",
-            when: () => !repo,
-          },
-          {
-            type: "input",
-            name: "port",
-            message: "Enter the port to deploy the application:",
-            when: () => !port,
-            validate: (input) => {
-              const portNumber = Number.parseInt(input, 10);
-              if (Number.isNaN(portNumber) || portNumber <= 0 || portNumber > 65535) {
-                return "Please enter a valid port number between 1 and 65535.";
-              }
-              return true;
-            },
-          },
-        ]);
 
-        owner = owner || answers.owner;
-        repo = repo || answers.repo;
-        port = port || answers.port;
-      }
+      const answers = await inquirer.prompt([
+        {
+          type: "input",
+          name: "owner",
+          message: "Enter the GitHub repository owner/org name:",
+          default: defaultOwner,
+          when: () => !owner,
+        },
+        {
+          type: "input",
+          name: "repo",
+          message: "Enter the GitHub repository name:",
+          when: () => !repo,
+        },
+        {
+          type: "list",
+          name: "projectType",
+          message: "What type of project is this?",
+          choices: ["Next.js", "Node.js"]
+        },
+        {
+          type: "input",
+          name: "port",
+          message: "Enter the port to deploy the application:",
+          when: (answers) => !port && answers.projectType === "Next.js",
+          validate: (input) => {
+            const portNumber = Number.parseInt(input, 10);
+            if (Number.isNaN(portNumber) || portNumber <= 0 || portNumber > 65535) {
+              return "Please enter a valid port number between 1 and 65535.";
+            }
+            return true;
+          },
+        },
+      ]);
 
-      if (!owner || !repo || !port) {
+      owner = owner || answers.owner;
+      repo = repo || answers.repo;
+      const projectType = answers.projectType;
+      port = port || answers.port;
+
+      if (!owner || !repo) {
         log(chalk.red("Error: Missing required arguments."));
         process.exit(1);
       }
 
-      if (owner.length === 0 || repo.length === 0 || port.length === 0) {
+      if (owner.length === 0 || repo.length === 0) {
         log(chalk.red("Error: Arguments cannot be empty."));
+        process.exit(1);
+      }
+
+      if (projectType === "Next.js" && !port) {
+        log(chalk.red("Error: Port is required for Next.js projects."));
         process.exit(1);
       }
 
@@ -1253,7 +1266,9 @@ program
         return newPort;
       };
 
-      port = await getAvailablePort(port);
+      if (port) {
+        port = await getAvailablePort(port);
+      }
 
       const git = simpleGit();
       const repoPath = `${projectsDir}/${repo}`;
@@ -1414,11 +1429,13 @@ program
         createSwap();
       }
 
-      const installCommand =
-        packageManager === "bun" ? "bun install" : "npm install";
-      const buildCommand =
-        packageManager === "bun" ? "bun run build" : "npm run build";
-      const startCommand = `pm2 start npm --name "${repo}" -- start -- --port ${port}`;
+      const installCommand = packageManager === "bun" ? "bun install" : "npm install";
+      const buildCommand = projectType === "Next.js" ?
+        (packageManager === "bun" ? "bun run build" : "npm run build") :
+        ""; // Skip build for Node.js projects
+      const startCommand = projectType === "Next.js" ?
+        `pm2 start npm --name "${repo}" -- start -- --port ${port}` :
+        port ? `pm2 start npm --name "${repo}" -- start -- --port ${port}` : `pm2 start index.js --name "${repo}"`;
 
       // Install dependencies and build the project
       try {
@@ -1432,15 +1449,18 @@ program
         process.exit(1);
       }
 
-      try {
-        execSync(`cd ${projectsDir}/${repo} && ${buildCommand}`, {
-          stdio: "inherit",
-        });
-      } catch (error) {
-        console.error(
-          chalk.red(`Failed to build the project: ${error.message}`)
-        );
-        process.exit(1);
+      // Only build if it's a Next.js project
+      if (projectType === "Next.js") {
+        try {
+          execSync(`cd ${projectsDir}/${repo} && ${buildCommand}`, {
+            stdio: "inherit",
+          });
+        } catch (error) {
+          console.error(
+            chalk.red(`Failed to build the project: ${error.message}`)
+          );
+          process.exit(1);
+        }
       }
 
       try {
@@ -1466,9 +1486,16 @@ program
       const webhookId = await setupWebhook(`${owner}/${repo}`);
 
       // Save the webhook ID to the project configuration
-      updateProjectsConfig({ pid, owner, repo, port, webhookId });
+      updateProjectsConfig({
+        pid,
+        owner,
+        repo,
+        port,
+        webhookId,
+        type: projectType.toLowerCase()
+      });
 
-      log(`Project deployed successfully on port ${port}`);
+      log(`${projectType} project deployed successfully${port ? ` on port ${port}` : ''}`);
     } catch (error) {
       console.error(chalk.red(`Error: ${error.message}`));
     }
@@ -1509,7 +1536,7 @@ const status = () => {
       chalk.yellow.bold(project.pid),
       chalk.white(project.owner),
       chalk.white(project.repo),
-      chalk.greenBright.bold(project.port),
+      project.port ? chalk.greenBright.bold(project.port) : chalk.gray("N/A"),
       pm2Status === "online" ? chalk.green(pm2Status) : chalk.red(pm2Status),
       chalk.white(
         formatDistanceToNow(new Date(project.last_updated), {
