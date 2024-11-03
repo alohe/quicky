@@ -674,7 +674,7 @@ async function updateProject(project, promptEnv = false) {
         // If it doesn't exist, start it on its port
         const startCommand = project.type === "nextjs"
           ? `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`
-          : `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start`;
+          : `cd ${repoPath} && PORT=${project.port} pm2 start npm --name "${project.repo}" -- start`;
         execSync(startCommand, {
           stdio: "inherit",
         });
