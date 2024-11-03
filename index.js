@@ -1430,9 +1430,7 @@ program
       }
 
       const installCommand = packageManager === "bun" ? "bun install" : "npm install";
-      const buildCommand = projectType === "Next.js" ?
-        (packageManager === "bun" ? "bun run build" : "npm run build") :
-        ""; // Skip build for Node.js projects
+      const buildCommand = packageManager === "bun" ? "bun run build" : "npm run build";
       const startCommand = projectType === "Next.js" ?
         `pm2 start npm --name "${repo}" -- start -- --port ${port}` :
         port ? `pm2 start npm --name "${repo}" -- start -- --port ${port}` : `pm2 start index.js --name "${repo}"`;
@@ -1449,18 +1447,27 @@ program
         process.exit(1);
       }
 
-      // Only build if it's a Next.js project
-      if (projectType === "Next.js") {
-        try {
-          execSync(`cd ${projectsDir}/${repo} && ${buildCommand}`, {
-            stdio: "inherit",
-          });
-        } catch (error) {
-          console.error(
-            chalk.red(`Failed to build the project: ${error.message}`)
-          );
-          process.exit(1);
+      // Check for build script in package.json for both Next.js and Node.js projects
+      try {
+        const packageJson = JSON.parse(fs.readFileSync(`${projectsDir}/${repo}/package.json`, 'utf8'));
+        const hasBuildScript = packageJson.scripts?.build;
+
+        if (hasBuildScript) {
+          try {
+            execSync(`cd ${projectsDir}/${repo} && ${buildCommand}`, {
+              stdio: "inherit",
+            });
+          } catch (error) {
+            console.error(
+              chalk.red(`Failed to build the project: ${error.message}`)
+            );
+            process.exit(1);
+          }
         }
+      } catch (error) {
+        console.error(
+          chalk.yellow(`Warning: Could not read package.json: ${error.message}`)
+        );
       }
 
       try {
