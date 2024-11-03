@@ -691,7 +691,7 @@ async function updateProject(project, promptEnv = false) {
         const startCommand = project.type.toLowerCase() === "next.js"
           ? `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`
           : port ? `cd ${repoPath} && PORT=${project.port} pm2 start npm --name "${project.repo}" -- start`
-          : `cd ${repoPath} && pm2 start index.js --name "${project.repo}"`;
+            : `cd ${repoPath} && pm2 start index.js --name "${project.repo}"`;
         execSync(startCommand, {
           stdio: "inherit",
         });
@@ -1443,9 +1443,12 @@ program
       if (!checkSwap()) {
         createSwap();
       }
-
       const installCommand = packageManager === "bun" ? "bun install" : "npm install";
       const buildCommand = packageManager === "bun" ? "bun run build" : "npm run build";
+      if (projectType.toLowerCase() === "next.js" && !port) {
+        console.error(chalk.red("Error: Port must be specified for Next.js applications"));
+        process.exit(1);
+      }
       const startCommand = projectType.toLowerCase() === "next.js" ?
         `pm2 start npm --name "${repo}" -- start -- --port ${port}` :
         port ? `pm2 start npm --name "${repo}" -- start -- --port ${port}` : `pm2 start index.js --name "${repo}"`;
