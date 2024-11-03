@@ -6,15 +6,15 @@ import simpleGit from "simple-git";
 import fs from "fs-extra";
 import chalk from "chalk";
 import { createSpinner } from "nanospinner";
-import os from "os";
-import path from "path";
+import os from "node:os";
+import path from "node:path";
 import Table from "cli-table3";
 import net from "net";
 import { v4 as uuidv4 } from "uuid";
 import { formatDistanceToNow } from "date-fns";
 import latestVersion from "latest-version";
 import semver from "semver";
-import { fileURLToPath } from "url";
+import { fileURLToPath } from "node:url";
 import axios from "axios";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -81,9 +81,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = console.log;
 const homeDir = os.homedir();
 const defaultFolder = path.join(homeDir, ".quicky");
-const projectsDir = defaultFolder + "/projects";
-const tempDir = defaultFolder + "/temp";
-const configPath = defaultFolder + "/config.json";
+const projectsDir = `${defaultFolder}/projects`;
+const tempDir = `${defaultFolder}/temp`;
+const configPath = `${defaultFolder}/config.json`;
 
 // Ensure directories exist
 if (!fs.existsSync(projectsDir)) {
@@ -107,6 +107,7 @@ const updateProjectsConfig = ({
   repo,
   port,
   webhookId,
+  type = "nextjs" // Add project type
 }) => {
   const project = {
     pid,
@@ -114,6 +115,7 @@ const updateProjectsConfig = ({
     repo,
     port,
     webhookId,
+    type, // Store project type
     last_updated: new Date().toISOString(),
   };
   const existing = config.projects.find((p) => p.repo === repo);
@@ -121,6 +123,7 @@ const updateProjectsConfig = ({
   if (existing) {
     existing.port = port;
     existing.owner = owner;
+    existing.type = type;
   } else {
     config.projects.push(project);
   }
@@ -168,31 +171,29 @@ async function setupDomain(domain, port) {
     } else {
       log(chalk.red(`Error: Domain ${domain} already exists.`));
       log(
-        `Please remove the existing configuration first or choose a different domain.`
+        "Please remove the existing configuration first or choose a different domain."
       );
       log(
-        `You can use the ${chalk.green(
-          "quicky domains"
-        )} command to manage domains.`
+        `You can use the ${chalk.green("quicky domains")} command to manage domains.`
       );
       return;
     }
   }
 
-  let zoneName = `zone_${uuidv4().slice(0, 5)}`;
-  let nginxConfig = `
+  const zoneName = `zone_${uuidv4().slice(0, 5)}`;
+  const nginxConfig = `
     limit_req_zone $binary_remote_addr zone=${zoneName}:10m rate=10r/s;
 
     server {
     listen 80;
     server_name ${domain};
 
-    # Main location block for proxying to the Next.js application
+    # Main location block for proxying to the application
     location / {
       # Enable rate limiting to prevent abuse
       limit_req zone=${zoneName} burst=5 nodelay;
 
-      # Proxy settings for Next.js application
+      # Proxy settings for application
       proxy_pass http://localhost:${port};
       proxy_http_version 1.1;
       proxy_set_header Upgrade $http_upgrade;
@@ -208,7 +209,7 @@ async function setupDomain(domain, port) {
       proxy_buffers 4 512k;
       proxy_buffer_size 256k;
 
-      # Disable buffering for real-time applications (like Next.js with WebSocket)
+      # Disable buffering for real-time applications
       proxy_buffering off;
       proxy_set_header X-Accel-Buffering no;
 
@@ -257,7 +258,7 @@ async function setupDomain(domain, port) {
   }
 
   // Restart Nginx to apply the changes
-  execSync(`sudo service nginx restart`, { stdio: "inherit" });
+  execSync("sudo service nginx restart", { stdio: "inherit" });
 
   log(chalk.green(`Nginx configuration created for ${domain}.`));
 
@@ -315,8 +316,7 @@ async function setupWebhookServer() {
           return "URL is required.";
         }
         if (
-          config.domains &&
-          config.domains.some((d) => d.domain === input.trim())
+          config.domains?.some((d) => d.domain === input.trim())
         ) {
           return "This domain is already in use. Please enter a different URL.";
         }
@@ -375,7 +375,7 @@ async function setupWebhookServer() {
     // Stop and delete the PM2 instance if it exists
     try {
       execSync(
-        `pm2 stop quicky-webhook-server && pm2 del quicky-webhook-server`,
+        "pm2 stop quicky-webhook-server && pm2 del quicky-webhook-server",
         {
           stdio: "inherit",
         }
@@ -388,7 +388,7 @@ async function setupWebhookServer() {
   }
 
   // Clone the webhook repository
-  await git.clone(`https://github.com/alohe/quicky-webhook.git`, webhookPath);
+  await git.clone("https://github.com/alohe/quicky-webhook.git", webhookPath);
 
   // Install dependencies
   execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
@@ -638,7 +638,7 @@ async function updateProject(project, promptEnv = false) {
         }
       }
 
-      // Install dependencies, build the project, and restart the PM2 instance
+      // Install dependencies, build the project if needed, and restart the PM2 instance
       const packageManager = config.packageManager || "npm";
       const installCommand =
         packageManager === "bun" ? "bun install" : "npm install";
@@ -647,12 +647,16 @@ async function updateProject(project, promptEnv = false) {
       });
 
       await sleep(1000);
-      spinner.update({ text: " Building the project...\n" });
-      const buildCommand =
-        packageManager === "bun" ? "bun run build" : "npm run build";
-      execSync(`cd ${repoPath} && ${buildCommand}`, {
-        stdio: "inherit",
-      });
+
+      // Only build if it's a Next.js project
+      if (project.type === "nextjs") {
+        spinner.update({ text: " Building the project...\n" });
+        const buildCommand =
+          packageManager === "bun" ? "bun run build" : "npm run build";
+        execSync(`cd ${repoPath} && ${buildCommand}`, {
+          stdio: "inherit",
+        });
+      }
 
       await sleep(1000);
       spinner.update({ text: " Restarting the project..." });
@@ -668,12 +672,12 @@ async function updateProject(project, promptEnv = false) {
         });
       } catch (error) {
         // If it doesn't exist, start it on its port
-        execSync(
-          `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`,
-          {
-            stdio: "inherit",
-          }
-        );
+        const startCommand = project.type === "nextjs"
+          ? `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`
+          : `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start`;
+        execSync(startCommand, {
+          stdio: "inherit",
+        });
       }
 
       // Update the last_updated timestamp
@@ -708,7 +712,7 @@ function help() {
   log(chalk.blue(rabbit)); // Change color to whatever fits your style
   log(
     `${chalk.hex("#fd6d4c").bold("Quicky")}${chalk.hex("#f39549")(
-      " - A CLI tool to deploy Next.js projects"
+      " - A CLI tool to deploy Next.js and Node.js projects"
     )}`
   );
   log("");
@@ -728,7 +732,7 @@ function help() {
         "init"
       )}      Save your GitHub account details and install dependencies\n`
   );
-  log(`  ${chalk.blue.bold("deploy")}    Deploy a Next.js project from GitHub`);
+  log(`  ${chalk.blue.bold("deploy")}    Deploy a Next.js or Node.js project from GitHub`);
   log(
     `  ${chalk.blue.bold(
       "list"
@@ -815,7 +819,7 @@ program
         {
           type: "confirm",
           name: "confirmUninstall",
-          message: `Are you sure you want to uninstall Quicky?`,
+          message: "Are you sure you want to uninstall Quicky?",
           default: false,
         },
       ]);
@@ -824,14 +828,14 @@ program
         // Stop and delete all PM2 instances managed by Quicky
         try {
           const projectNames = config.projects.map((project) => project.repo);
-          projectNames.forEach((name) => {
+          for (const name of projectNames) {
             execSync(`pm2 del ${name}`, {
               stdio: "inherit",
             });
-          });
+          }
 
           // Stop and delete the webhook server if it exists
-          if (config.webhook && config.webhook.pm2Name) {
+          if (config.webhook?.pm2Name) {
             execSync(`pm2 del ${config.webhook.pm2Name}`, {
               stdio: "inherit",
             });
@@ -849,7 +853,7 @@ program
         // Delete Nginx configurations managed by Quicky
         try {
           const domains = config.domains || [];
-          domains.forEach((domain) => {
+          for (const domain of domains) {
             const domainConfigPath = `/etc/nginx/sites-available/${domain.domain}`;
             const domainSymlinkPath = `/etc/nginx/sites-enabled/${domain.domain}`;
             if (fs.existsSync(domainConfigPath)) {
@@ -858,7 +862,7 @@ program
             if (fs.existsSync(domainSymlinkPath)) {
               execSync(`sudo rm ${domainSymlinkPath}`, { stdio: "inherit" });
             }
-          });
+          }
           log(
             chalk.green(
               "Nginx configurations for all domains managed by Quicky have been deleted."
@@ -937,7 +941,7 @@ program
         saveConfig(config);
 
         // Check if the webhook server is already running
-        if (config.webhook && config.webhook.pm2Name) {
+        if (config.webhook?.pm2Name) {
           try {
             const pm2Status = execSync(
               `pm2 describe ${config.webhook.pm2Name}`,
@@ -987,7 +991,7 @@ program
             });
           } catch (installError) {
             spinner.error({
-              text: `Failed to install dependencies. Please ensure you have npm installed.`,
+              text: "Failed to install dependencies. Please ensure you have npm installed.",
             });
           }
         }
@@ -1013,7 +1017,7 @@ program
         ]);
 
         if (deployNow) {
-          execSync(`quicky deploy`, { stdio: "inherit" });
+          execSync("quicky deploy", { stdio: "inherit" });
         } else {
           process.exit(0);
         }
@@ -1138,7 +1142,7 @@ program
       let { owner, repo, port } = cmd;
       // Read stored username from config
       let defaultOwner = owner;
-      if (config.github && config.github.username) {
+      if (config.github?.username) {
         defaultOwner = owner || config.github.username;
       }
       if (!repo || !port) {
@@ -1162,8 +1166,8 @@ program
             message: "Enter the port to deploy the application:",
             when: () => !port,
             validate: (input) => {
-              const portNumber = parseInt(input, 10);
-              if (isNaN(portNumber) || portNumber <= 0 || portNumber > 65535) {
+              const portNumber = Number.parseInt(input, 10);
+              if (Number.isNaN(portNumber) || portNumber <= 0 || portNumber > 65535) {
                 return "Please enter a valid port number between 1 and 65535.";
               }
               return true;
@@ -1225,6 +1229,8 @@ program
       };
 
       const getAvailablePort = async (port) => {
+        let newPort;
+
         while (await isPortInUse(port)) {
           const answer = await inquirer.prompt([
             {
@@ -1232,7 +1238,7 @@ program
               name: "port",
               message: `Port ${port} is already in use. Please enter another port:`,
               validate: (input) => {
-                const portNumber = parseInt(input, 10);
+                const portNumber = Number.parseInt(input, 10);
                 return Number.isInteger(portNumber) &&
                   portNumber > 0 &&
                   portNumber <= 65535
@@ -1241,9 +1247,10 @@ program
               },
             },
           ]);
-          port = answer.port;
+          newPort = Number.parseInt(answer.port, 10);
         }
-        return port;
+
+        return newPort;
       };
 
       port = await getAvailablePort(port);
@@ -1280,8 +1287,8 @@ program
             `⚠️ Directory ${chalk
               .hex("#FFA500")
               .bold(repoPath)} exists and is not empty. Use ${chalk.green(
-              "manage"
-            )} to manage the project.`
+                "manage"
+              )} to manage the project.`
           );
           process.exit(1);
         }
@@ -1485,10 +1492,10 @@ const status = () => {
     colWidths: [10, 15, 15, 10, 15, 20],
   });
 
-  config.projects.forEach((project) => {
+  for (const project of config.projects) {
     let pm2Status = "Not Running";
     try {
-      const pm2List = execSync(`pm2 jlist`, { encoding: "utf-8" });
+      const pm2List = execSync('pm2 jlist', { encoding: "utf-8" });
       const pm2Instances = JSON.parse(pm2List);
       const instance = pm2Instances.find((inst) => inst.name === project.repo);
       if (instance) {
@@ -1510,7 +1517,7 @@ const status = () => {
         })
       ),
     ]);
-  });
+  }
 
   log(table.toString());
 };
@@ -1652,7 +1659,7 @@ program
                 });
               }
 
-              execSync(`sudo service nginx restart`, { stdio: "inherit" });
+              execSync("sudo service nginx restart", { stdio: "inherit" });
 
               // Remove webhook if it exists
               if (project.webhookId) {
@@ -1747,11 +1754,11 @@ program
       if (projects.length === 0) {
         log(chalk.yellow("No projects found. Please deploy a project first."));
         return;
-      } else {
-        // check if there are any domains already associated with the projects
-        if (config.domains && config.domains.length > 0) {
-          await handleListDomains(projects);
-        }
+      }
+
+      // check if there are any domains already associated with the projects
+      if (config.domains?.length > 0) {
+        await handleListDomains(projects);
       }
 
       const { action } = await inquirer.prompt([
@@ -1874,7 +1881,7 @@ async function handleRemoveDomain(projects) {
     if (fs.existsSync(nginxConfigPath)) {
       const command = `sudo rm -f ${nginxConfigPath} /etc/nginx/sites-enabled/${domain}`;
       execSync(command, { stdio: "inherit" });
-      execSync(`sudo service nginx restart`, { stdio: "inherit" });
+      execSync("sudo service nginx restart", { stdio: "inherit" });
       log(chalk.green(`Nginx configuration removed for ${domain}.`));
     }
 
@@ -1917,18 +1924,18 @@ async function handleListDomains(projects) {
       colWidths: [20, 30, 10],
     });
 
-    projects.forEach((project) => {
+    for (const project of projects) {
       const projectDomains = config.domains.filter(
         (d) => d.pid === project.pid
       );
-      projectDomains.forEach((domain) => {
+      for (const domain of projectDomains) {
         table.push([
           chalk.white(project.repo),
           chalk.blue(domain.domain),
           chalk.white(project.port),
         ]);
-      });
-    });
+      }
+    }
 
     log(chalk.green.bold("\nDomains Configuration:"));
     log(table.toString());
