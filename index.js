@@ -185,62 +185,91 @@ async function setupDomain(domain, port) {
 
   const zoneName = `zone_${uuidv4().slice(0, 5)}`;
   const nginxConfig = `
-    limit_req_zone $binary_remote_addr zone=${zoneName}:10m rate=10r/s;
+    # Rate limiting zone definition
+    limit_req_zone $binary_remote_addr zone=${zoneName}:10m rate=30r/s;
 
     server {
-    listen 80;
-    server_name ${domain};
+      listen 80;
+      server_name ${domain};
 
-    # Main location block for proxying to the application
-    location / {
-      # Enable rate limiting to prevent abuse
-      limit_req zone=${zoneName} burst=5 nodelay;
+      # Main location block for proxying to the application
+      location / {
+        # Rate limiting with burst and delay
+        limit_req zone=${zoneName} burst=10 delay=10;
 
-      # Proxy settings for application
-      proxy_pass http://localhost:${port};
-      proxy_http_version 1.1;
-      proxy_set_header Upgrade $http_upgrade;
-      proxy_set_header Connection 'upgrade';
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
-      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      proxy_set_header X-NginX-Proxy true;
+        # Proxy settings
+        proxy_pass http://localhost:${port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-NginX-Proxy true;
 
-      # Optimize buffering and memory limits for large requests
-      proxy_busy_buffers_size 512k;
-      proxy_buffers 4 512k;
-      proxy_buffer_size 256k;
+        # Buffering and memory optimization
+        proxy_buffering on;
+        proxy_buffer_size 256k;
+        proxy_buffers 8 256k;
+        proxy_busy_buffers_size 512k;
+        proxy_temp_file_write_size 512k;
+        proxy_max_temp_file_size 1024m;
 
-      # Disable buffering for real-time applications
-      proxy_buffering off;
-      proxy_set_header X-Accel-Buffering no;
+        # Modern framework optimizations
+        try_files $uri $uri/ /index.html;
 
-      # Caching control headers (prevents caching for dynamic content)
-      add_header Cache-Control no-store;
+        # Compression settings
+        gzip on;
+        gzip_types 
+          text/plain 
+          text/css 
+          application/json 
+          application/javascript 
+          text/xml 
+          application/xml 
+          application/xml+rss 
+          text/javascript;
+        gzip_comp_level 6;
+        gzip_min_length 1000;
 
-      # Timeouts and keepalive settings to prevent disruptions
-      proxy_connect_timeout 60s;
-      proxy_send_timeout 60s;
-      proxy_read_timeout 60s;
-      keepalive_timeout 60s;
+        # Connection timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        keepalive_timeout 65s;
+        keepalive_requests 100;
 
-      # Handle large request bodies if needed
-      client_max_body_size 50M;
+        # Request size limit
+        client_max_body_size 50M;
+      }
+
+      # Static asset caching with ETag and Last-Modified headers
+      location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        include mime.types;
+        default_type application/octet-stream;
+        expires 7d;
+        add_header Cache-Control "public, no-transform, must-revalidate";
+        etag on;
+        if_modified_since exact;
+        access_log off;
+        log_not_found off;
+      }
+
+      # Logging configuration
+      access_log /var/log/nginx/${domain}-access.log combined buffer=512k flush=1m;
+      error_log /var/log/nginx/${domain}-error.log warn;
+
+      # Security headers
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-Frame-Options "SAMEORIGIN" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+      add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+      add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none';" always;
     }
-
-    # Logs for debugging and monitoring
-    access_log /var/log/nginx/${domain}-access.log;
-    error_log /var/log/nginx/${domain}-error.log;
-    }
-
-    # Additional security headers for best practices
-    add_header X-Content-Type-Options "nosniff";
-    add_header X-Frame-Options "DENY";
-    add_header X-XSS-Protection "1; mode=block";
-    add_header Referrer-Policy "no-referrer-when-downgrade";
-    add_header Content-Security-Policy "default-src 'self'; img-src *; media-src * data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:";
-    `;
+  `;
 
   // Write Nginx config to the sites-available  and sites-enabled directories
   const tempFilePath = `/tmp/${domain}.conf`;
