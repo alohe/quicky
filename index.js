@@ -107,7 +107,7 @@ const updateProjectsConfig = ({
   repo,
   port,
   webhookId,
-  type = "nextjs" // Add project type
+  type = "nextjs", // Add project type
 }) => {
   const project = {
     pid,
@@ -175,7 +175,9 @@ async function setupDomain(domain, port) {
         "Please remove the existing configuration first or choose a different domain."
       );
       log(
-        `You can use the ${chalk.green("quicky domains")} command to manage domains.`
+        `You can use the ${chalk.green(
+          "quicky domains"
+        )} command to manage domains.`
       );
       return;
     }
@@ -316,9 +318,7 @@ async function setupWebhookServer() {
         if (input.trim() === "") {
           return "URL is required.";
         }
-        if (
-          config.domains?.some((d) => d.domain === input.trim())
-        ) {
+        if (config.domains?.some((d) => d.domain === input.trim())) {
           return "This domain is already in use. Please enter a different URL.";
         }
         return true;
@@ -643,6 +643,10 @@ async function updateProject(project, promptEnv = false) {
       const packageManager = config.packageManager || "npm";
       const installCommand =
         packageManager === "bun" ? "bun install" : "npm install";
+      const buildCommand =
+        packageManager === "bun" ? "bun run build" : "npm run build";
+      const startCommand = `pm2 restart ${project.repo}`;
+
       execSync(`cd ${repoPath} && ${installCommand}`, {
         stdio: "inherit",
       });
@@ -651,13 +655,13 @@ async function updateProject(project, promptEnv = false) {
 
       // Check for build script in package.json for both Next.js and Node.js projects
       try {
-        const packageJson = JSON.parse(fs.readFileSync(`${repoPath}/package.json`, 'utf8'));
+        const packageJson = JSON.parse(
+          fs.readFileSync(`${repoPath}/package.json`, "utf8")
+        );
         const hasBuildScript = packageJson.scripts?.build;
 
         if (hasBuildScript) {
           spinner.update({ text: " Building the project...\n" });
-          const buildCommand =
-            packageManager === "bun" ? "bun run build" : "npm run build";
           execSync(`cd ${repoPath} && ${buildCommand}`, {
             stdio: "inherit",
           });
@@ -677,22 +681,12 @@ async function updateProject(project, promptEnv = false) {
           stdio: "ignore",
         });
         // If it exists, restart
-        if (project.type.toLowerCase() === "next.js") {
-          execSync(`cd ${repoPath} && pm2 restart ${project.repo} -- --port ${project.port}`, {
-            stdio: "inherit",
-          });
-        } else {
-          execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
-            stdio: "inherit",
-          });
-        }
+        execSync(`cd ${repoPath} && pm2 restart ${project.repo}`, {
+          stdio: "inherit",
+        });
       } catch (error) {
         // If it doesn't exist, start it on its port
-        const startCommand = project.type.toLowerCase() === "next.js"
-          ? `cd ${repoPath} && pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`
-          : port ? `cd ${repoPath} && PORT=${project.port} pm2 start npm --name "${project.repo}" -- start`
-            : `cd ${repoPath} && pm2 start index.js --name "${project.repo}"`;
-        execSync(startCommand, {
+        execSync(`cd ${repoPath} && ${startCommand}`, {
           stdio: "inherit",
         });
       }
@@ -749,7 +743,11 @@ function help() {
         "init"
       )}      Save your GitHub account details and install dependencies\n`
   );
-  log(`  ${chalk.blue.bold("deploy")}    Deploy a Next.js or Node.js project from GitHub`);
+  log(
+    `  ${chalk.blue.bold(
+      "deploy"
+    )}    Deploy a Next.js or Node.js project from GitHub`
+  );
   log(
     `  ${chalk.blue.bold(
       "list"
@@ -1095,12 +1093,9 @@ program
         }
       } else if (action === "Check Status") {
         try {
-          const pm2Status = execSync(
-            `pm2 describe ${config.webhook.pm2Name}`,
-            {
-              stdio: "pipe",
-            }
-          ).toString();
+          const pm2Status = execSync(`pm2 describe ${config.webhook.pm2Name}`, {
+            stdio: "pipe",
+          }).toString();
 
           if (pm2Status.includes("online")) {
             log(chalk.green("Webhook server is running."));
@@ -1181,7 +1176,7 @@ program
           type: "list",
           name: "projectType",
           message: "What type of project is this?",
-          choices: ["Next.js", "Node.js"]
+          choices: ["Next.js", "Node.js"],
         },
         {
           type: "input",
@@ -1190,7 +1185,11 @@ program
           when: (answers) => !port && answers.projectType === "Next.js",
           validate: (input) => {
             const portNumber = Number.parseInt(input, 10);
-            if (Number.isNaN(portNumber) || portNumber <= 0 || portNumber > 65535) {
+            if (
+              Number.isNaN(portNumber) ||
+              portNumber <= 0 ||
+              portNumber > 65535
+            ) {
               return "Please enter a valid port number between 1 and 65535.";
             }
             return true;
@@ -1317,8 +1316,8 @@ program
             `⚠️ Directory ${chalk
               .hex("#FFA500")
               .bold(repoPath)} exists and is not empty. Use ${chalk.green(
-                "manage"
-              )} to manage the project.`
+              "manage"
+            )} to manage the project.`
           );
           process.exit(1);
         }
@@ -1443,15 +1442,22 @@ program
       if (!checkSwap()) {
         createSwap();
       }
-      const installCommand = packageManager === "bun" ? "bun install" : "npm install";
-      const buildCommand = packageManager === "bun" ? "bun run build" : "npm run build";
+      const installCommand =
+        packageManager === "bun" ? "bun install" : "npm install";
+      const buildCommand =
+        packageManager === "bun" ? "bun run build" : "npm run build";
       if (projectType.toLowerCase() === "next.js" && !port) {
-        console.error(chalk.red("Error: Port must be specified for Next.js applications"));
+        console.error(
+          chalk.red("Error: Port must be specified for Next.js applications")
+        );
         process.exit(1);
       }
-      const startCommand = projectType.toLowerCase() === "next.js" ?
-        `pm2 start npm --name "${repo}" -- start -- --port ${port}` :
-        port ? `pm2 start npm --name "${repo}" -- start -- --port ${port}` : `pm2 start index.js --name "${repo}"`;
+      const startCommand =
+        projectType.toLowerCase() === "next.js"
+          ? `pm2 start npm --name "${repo}" -- start -- --port ${port}`
+          : port
+          ? `pm2 start npm --name "${repo}" -- start -- --port ${port}`
+          : `pm2 start index.js --name "${repo}"`;
 
       // Install dependencies and build the project
       try {
@@ -1467,7 +1473,9 @@ program
 
       // Check for build script in package.json for both Next.js and Node.js projects
       try {
-        const packageJson = JSON.parse(fs.readFileSync(`${projectsDir}/${repo}/package.json`, 'utf8'));
+        const packageJson = JSON.parse(
+          fs.readFileSync(`${projectsDir}/${repo}/package.json`, "utf8")
+        );
         const hasBuildScript = packageJson.scripts?.build;
 
         if (hasBuildScript) {
@@ -1517,10 +1525,14 @@ program
         repo,
         port,
         webhookId,
-        type: projectType.toLowerCase()
+        type: projectType.toLowerCase(),
       });
 
-      log(`${projectType} project deployed successfully${port ? ` on port ${port}` : ''}`);
+      log(
+        `${projectType} project deployed successfully${
+          port ? ` on port ${port}` : ""
+        }`
+      );
     } catch (error) {
       console.error(chalk.red(`Error: ${error.message}`));
     }
@@ -1547,7 +1559,7 @@ const status = () => {
   for (const project of config.projects) {
     let pm2Status = "Not Running";
     try {
-      const pm2List = execSync('pm2 jlist', { encoding: "utf-8" });
+      const pm2List = execSync("pm2 jlist", { encoding: "utf-8" });
       const pm2Instances = JSON.parse(pm2List);
       const instance = pm2Instances.find((inst) => inst.name === project.repo);
       if (instance) {
