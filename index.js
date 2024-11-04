@@ -216,38 +216,35 @@ async function setupDomain(domain, port) {
         proxy_temp_file_write_size 512k;
         proxy_max_temp_file_size 1024m;
 
-        # Modern framework optimizations
-        try_files $uri $uri/ /index.html;
+        # Next.js specific configuration
+        proxy_cache_bypass $http_upgrade;
+        proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
+        proxy_cache_valid 200 60m;
+        proxy_cache_valid 404 1m;
+      }
 
-        # Compression settings
-        gzip on;
-        gzip_types 
-          text/plain 
-          text/css 
-          application/json 
-          application/javascript 
-          text/xml 
-          application/xml 
-          application/xml+rss 
-          text/javascript;
-        gzip_comp_level 6;
-        gzip_min_length 1000;
+      # Next.js static files location
+      location /_next/static {
+        proxy_pass http://localhost:${port};
+        proxy_cache_bypass $http_upgrade;
+        expires 365d;
+        access_log off;
+        add_header Cache-Control "public, no-transform, must-revalidate";
+      }
 
-        # Connection timeouts
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-        keepalive_timeout 65s;
-        keepalive_requests 100;
-
-        # Request size limit
-        client_max_body_size 50M;
+      # Static files location
+      location /static {
+        proxy_pass http://localhost:${port};
+        proxy_cache_bypass $http_upgrade;
+        expires 365d;
+        access_log off;
+        add_header Cache-Control "public, no-transform, must-revalidate";
       }
 
       # Static asset caching with ETag and Last-Modified headers
       location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
-        include mime.types;
-        default_type application/octet-stream;
+        proxy_pass http://localhost:${port};
+        proxy_cache_bypass $http_upgrade;
         expires 7d;
         add_header Cache-Control "public, no-transform, must-revalidate";
         etag on;
@@ -255,6 +252,30 @@ async function setupDomain(domain, port) {
         access_log off;
         log_not_found off;
       }
+
+      # Compression settings
+      gzip on;
+      gzip_types 
+        text/plain 
+        text/css 
+        application/json 
+        application/javascript 
+        text/xml 
+        application/xml 
+        application/xml+rss 
+        text/javascript;
+      gzip_comp_level 6;
+      gzip_min_length 1000;
+
+      # Connection timeouts
+      proxy_connect_timeout 60s;
+      proxy_send_timeout 60s;
+      proxy_read_timeout 60s;
+      keepalive_timeout 65s;
+      keepalive_requests 100;
+
+      # Request size limit
+      client_max_body_size 50M;
 
       # Logging configuration
       access_log /var/log/nginx/${domain}-access.log combined buffer=512k flush=1m;
