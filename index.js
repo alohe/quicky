@@ -1207,7 +1207,6 @@ program
       if (config.github?.username) {
         defaultOwner = owner || config.github.username;
       }
-
       const answers = await inquirer.prompt([
         {
           type: "input",
@@ -1229,10 +1228,17 @@ program
           choices: ["Next.js", "Node.js"],
         },
         {
+          type: "confirm",
+          name: "needsPort",
+          message: "Do you want to specify a port for this Node.js application?",
+          default: false,
+          when: (answers) => answers.projectType === "Node.js" && !port,
+        },
+        {
           type: "input",
           name: "port",
           message: "Enter the port to deploy the application:",
-          when: (answers) => !port && answers.projectType === "Next.js",
+          when: (answers) => (!port && answers.projectType === "Next.js") || answers.needsPort,
           validate: (input) => {
             const portNumber = Number.parseInt(input, 10);
             if (
