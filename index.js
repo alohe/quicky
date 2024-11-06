@@ -1599,30 +1599,67 @@ const status = () => {
   const table = new Table({
     head: [
       chalk.cyan.bold("PID"),
-      chalk.cyan.bold("Owner"),
+      chalk.cyan.bold("Owner"), 
       chalk.cyan.bold("Repository"),
       chalk.cyan.bold("Port"),
       chalk.cyan.bold("Status"),
+      chalk.cyan.bold("Memory"),
+      chalk.cyan.bold("Disk Space"),
       chalk.cyan.bold("Last Updated"),
+      chalk.cyan.bold("Errors"),
     ],
     style: {
       head: ["cyan", "bold"],
     },
     wordWrap: true,
-    colWidths: [10, 15, 15, 10, 15, 20],
+    colWidths: [8, 12, 15, 8, 12, 12, 12, 15, 25],
   });
 
   for (const project of config.projects) {
     let pm2Status = "Not Running";
+    let memory = "N/A";
+    let diskSpace = "N/A";
+    let errorMsg = "";
+
     try {
       const pm2List = execSync("pm2 jlist", { encoding: "utf-8" });
       const pm2Instances = JSON.parse(pm2List);
       const instance = pm2Instances.find((inst) => inst.name === project.repo);
+      
       if (instance) {
         pm2Status = instance.pm2_env.status;
+        memory = `${Math.round(instance.monit.memory / (1024 * 1024))}MB`;
+        
+        // Get project directory size
+        const projectPath = `${projectsDir}/${project.repo}`;
+        if (fs.existsSync(projectPath)) {
+          const size = execSync(`du -sh "${projectPath}" | cut -f1`, { encoding: 'utf-8' }).trim();
+          diskSpace = size;
+        }
+
+        // Only check for errors if status is not online
+        if (instance.pm2_env.status !== 'online' && instance.pm2_env.pm_err_log_path && fs.existsSync(instance.pm2_env.pm_err_log_path)) {
+          const errors = execSync(`tail -n 1 "${instance.pm2_env.pm_err_log_path}"`, { encoding: 'utf-8' }).trim();
+          if (errors) {
+            errorMsg = errors.substring(0, 25) + (errors.length > 25 ? '...' : '');
+            // Prompt user to view full error log
+            inquirer.prompt([{
+              type: 'confirm',
+              name: 'viewErrors',
+              message: `Would you like to view the full error log for ${project.repo}?`,
+              default: false
+            }]).then(answer => {
+              if (answer.viewErrors) {
+                console.log(chalk.red('\nFull error message:'));
+                console.log(errors);
+              }
+            });
+          }
+        }
       }
     } catch (error) {
       pm2Status = "Error";
+      errorMsg = error.message.substring(0, 25) + (error.message.length > 25 ? '...' : '');
     }
 
     table.push([
@@ -1631,11 +1668,14 @@ const status = () => {
       chalk.white(project.repo),
       project.port ? chalk.greenBright.bold(project.port) : chalk.gray("N/A"),
       pm2Status === "online" ? chalk.green(pm2Status) : chalk.red(pm2Status),
+      chalk.white(memory),
+      chalk.white(diskSpace),
       chalk.white(
         formatDistanceToNow(new Date(project.last_updated), {
           addSuffix: true,
         })
       ),
+      chalk.gray("-"),
     ]);
   }
 
