@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import inquirer from "inquirer";
-import { execSync } from "child_process";
+import { execSync } from "node:child_process";
 import simpleGit from "simple-git";
 import fs from "fs-extra";
 import chalk from "chalk";
@@ -9,7 +9,7 @@ import { createSpinner } from "nanospinner";
 import os from "node:os";
 import path from "node:path";
 import Table from "cli-table3";
-import net from "net";
+import net from "node:net";
 import { v4 as uuidv4 } from "uuid";
 import { formatDistanceToNow } from "date-fns";
 import latestVersion from "latest-version";
@@ -671,14 +671,14 @@ async function updateProject(project, promptEnv = false) {
 							type: "confirm",
 							name: "updateEnv",
 							message: "Would you like to update the .env file?",
-							default: false
-						}
+							default: false,
+						},
 					]);
 
 					if (updateEnv) {
 						// Copy existing .env to temp location and open in nano
 						fs.copyFileSync(`${repoPath}/.env`, `${tempPath}/.env`);
-						execSync(`nano ${tempPath}/.env`, { stdio: 'inherit' });
+						execSync(`nano ${tempPath}/.env`, { stdio: "inherit" });
 					} else {
 						// Preserve existing .env file by copying to temp directory
 						fs.copyFileSync(`${repoPath}/.env`, `${tempPath}/.env`);
@@ -691,11 +691,11 @@ async function updateProject(project, promptEnv = false) {
 							name: "createEnv",
 							message: "Would you like to create a .env file?",
 							default: false
-						}
+						},
 					]);
 
 					if (createEnv) {
-						execSync(`nano ${tempPath}/.env`, { stdio: 'inherit' });
+						execSync(`nano ${tempPath}/.env`, { stdio: "inherit" });
 					}
 				}
 			} else if (fs.existsSync(`${repoPath}/.env`)) {
@@ -1554,7 +1554,7 @@ program
 				}
 			}
 
-			// Check if swap space is already enabled
+			// Try to create swap space but continue if it fails
 			const checkSwap = () => {
 				try {
 					const swapInfo = execSync("swapon --show", { encoding: "utf-8" });
@@ -1564,7 +1564,6 @@ program
 				}
 			};
 
-			// Create and enable swap space if not already enabled
 			const createSwap = () => {
 				try {
 					log(chalk.yellow("Creating swap space..."));
@@ -1578,16 +1577,15 @@ program
 					);
 					log(chalk.green("✔ Swap space created and enabled successfully."));
 				} catch (error) {
-					console.error(
-						chalk.red(`Failed to create swap space: ${error.message}`),
-					);
-					process.exit(1);
+					log(chalk.yellow(`Failed to create swap space: ${error.message}`));
+					log(chalk.yellow("Continuing without swap space..."));
 				}
 			};
 
 			if (!checkSwap()) {
 				createSwap();
 			}
+
 			const installCommand =
 				packageManager === "bun" ? "bun install" : "npm install";
 			const buildCommand =
