@@ -133,6 +133,30 @@ const updateProjectsConfig = ({
 };
 
 async function setupDomain(domain, port) {
+	// Check if domain is already configured
+	if (fs.existsSync(`/etc/nginx/sites-available/${domain}`)) {
+		throw new Error(`Domain ${domain} is already configured in Nginx`);
+	}
+
+	// Install Nginx and Certbot if not already installed
+	try {
+		execSync("nginx -v", { stdio: "ignore" });
+	} catch (error) {
+		execSync("sudo apt install nginx -y", { stdio: "inherit" });
+	}
+
+	try {
+		// Check if certbot and the nginx plugin are installed
+		execSync("certbot --version && certbot plugins | grep nginx", {
+			stdio: "ignore",
+		});
+	} catch (error) {
+		// If not installed, install certbot and the nginx plugin
+		execSync("sudo apt install certbot python3-certbot-nginx -y", {
+			stdio: "inherit",
+		});
+	}
+
 	// Check if domain is pointing to the server's IP address using dig
 	const checkDomainPointing = async (domain) => {
 		let digResult = "";
@@ -1997,25 +2021,6 @@ program
 	.description("Manage domains and subdomains for the projects")
 	.action(async () => {
 		try {
-			// Install Nginx and Certbot if not already installed
-			try {
-				execSync("nginx -v", { stdio: "ignore" });
-			} catch (error) {
-				execSync("sudo apt install nginx -y", { stdio: "inherit" });
-			}
-
-			try {
-				// Check if certbot and the nginx plugin are installed
-				execSync("certbot --version && certbot plugins | grep nginx", {
-					stdio: "ignore",
-				});
-			} catch (error) {
-				// If not installed, install certbot and the nginx plugin
-				execSync("sudo apt install certbot python3-certbot-nginx -y", {
-					stdio: "inherit",
-				});
-			}
-
 			// Read project list to get a list of existing projects and their ports.
 			const projects = config.projects;
 
