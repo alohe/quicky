@@ -97,17 +97,19 @@ if (!fs.existsSync(configPath)) {
 // Read configuration file once
 const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
 
+// Function to save the configuration file
 const saveConfig = (config) => {
 	fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 };
 
+// Function to update the projects configuration file
 const updateProjectsConfig = ({
 	pid = uuidv4().slice(0, 5),
 	owner,
 	repo,
 	port,
 	webhookId,
-	type = "next.js", // Add project type
+	type = "next.js",
 }) => {
 	const project = {
 		pid,
@@ -115,7 +117,7 @@ const updateProjectsConfig = ({
 		repo,
 		port,
 		webhookId,
-		type, // Store project type
+		type,
 		last_updated: new Date().toISOString(),
 	};
 	const existing = config.projects.find((p) => p.repo === repo);
@@ -132,21 +134,43 @@ const updateProjectsConfig = ({
 	saveConfig(config);
 };
 
-async function setupDomain(domain, port) {
-	// Check if domain is already configured
-	if (fs.existsSync(`/etc/nginx/sites-available/${domain}`)) {
-		throw new Error(`Domain ${domain} is already configured in Nginx`);
+
+// Function to remove a domain or subdomain and delete Nginx and Certbot configuration files
+async function removeDomain(domain) {
+	// Remove Nginx configuration
+	const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
+	if (fs.existsSync(nginxConfigPath)) {
+		const command = `sudo rm -f ${nginxConfigPath} /etc/nginx/sites-enabled/${domain}`;
+		execSync(command, { stdio: "inherit" });
+		execSync("sudo service nginx restart", { stdio: "inherit" });
+		log(chalk.green(`Nginx configuration removed for ${domain}.`));
 	}
 
-	// Install Nginx and Certbot if not already installed
+	// Remove SSL certificate using Certbot
+	const certbotCommand = `sudo certbot delete --cert-name ${domain}`;
+	execSync(certbotCommand, { stdio: "inherit" });
+	log(chalk.green(`SSL certificate removed for ${domain}.`));
+
+	// Update the config file and remove the domain from the config
+	config.domains = config.domains.filter((d) => d.domain !== domain);
+	saveConfig(config);
+	log(
+		chalk.green(
+			`Domain ${domain} removed successfully.`,
+		),
+	);
+}
+
+async function setupDomain(domain, port) {
+	// Install Nginx if not already installed
 	try {
 		execSync("nginx -v", { stdio: "ignore" });
 	} catch (error) {
 		execSync("sudo apt install nginx -y", { stdio: "inherit" });
 	}
 
+	// Install Certbot if not already installed
 	try {
-		// Check if certbot and the nginx plugin are installed
 		execSync("certbot --version && certbot plugins | grep nginx", {
 			stdio: "ignore",
 		});
@@ -155,6 +179,49 @@ async function setupDomain(domain, port) {
 		execSync("sudo apt install certbot python3-certbot-nginx -y", {
 			stdio: "inherit",
 		});
+	}
+
+	// Check if domain exists in config.json
+	const domainExists = (config.domains || []).some((d) => d.domain === domain);
+
+	if (domainExists) {
+		const answer = await prompts({
+			type: 'confirm',
+			name: 'overwrite',
+			message: `Domain ${domain} already exists. Do you want to overwrite and reconfigure it?`,
+			initial: false
+		});
+
+		if (!answer.overwrite) {
+			throw new Error('Domain configuration cancelled by user');
+		}
+
+		await removeDomain(domain);
+		log(chalk.green(`Existing configuration for ${domain} has been removed. Proceeding with new setup...`));
+	} else {
+		// Check if nginx config exists for this domain and remove it
+		const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
+		const nginxSymlinkPath = `/etc/nginx/sites-enabled/${domain}`;
+
+		if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
+			log(chalk.yellow(`Found existing Nginx configuration for ${domain}, removing...`));
+			try {
+				fs.unlinkSync(nginxSymlinkPath);
+				fs.unlinkSync(nginxConfigPath);
+			} catch (error) {
+				log(chalk.yellow(`Error removing existing files: ${error.message}`));
+			}
+		}
+
+		// Check and remove any existing SSL certificates
+		try {
+			execSync(`certbot delete --cert-name ${domain} --non-interactive`, {
+				stdio: "ignore",
+			});
+			log(chalk.yellow(`Removed existing SSL certificate for ${domain}`));
+		} catch (error) {
+			// Certificate doesn't exist, continue with setup
+		}
 	}
 
 	// Check if domain is pointing to the server's IP address using dig
@@ -180,30 +247,15 @@ async function setupDomain(domain, port) {
 	const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
 	const nginxSymlinkPath = `/etc/nginx/sites-enabled/${domain}`;
 
-	// Check if the domain already exists in Nginx configuration
+	// Remove existing Nginx configuration if it exists
 	if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
-		// Check if the domain exists in the config.json
-		const domainExistsInConfig = (config.domains || []).some(
-			(d) => d.domain === domain,
-		);
-		if (!domainExistsInConfig) {
-			log(
-				chalk.yellow(
-					`Warning: Domain ${domain} configuration files exist but domain is not in config.json.`,
-				),
-			);
-			log(`Overriding the existing configuration files for ${domain}.`);
-		} else {
-			log(chalk.red(`Error: Domain ${domain} already exists.`));
-			log(
-				"Please remove the existing configuration first or choose a different domain.",
-			);
-			log(
-				`You can use the ${chalk.green(
-					"quicky domains",
-				)} command to manage domains.`,
-			);
-			return;
+		log(chalk.yellow(`Found existing Nginx configuration for ${domain}, removing...`));
+		try {
+			fs.unlinkSync(nginxSymlinkPath);
+			fs.unlinkSync(nginxConfigPath);
+		} catch (error) {
+			log(chalk.yellow(`Error removing existing files: ${error.message}`));
+			log(chalk.yellow('Continuing with setup...'));
 		}
 	}
 
@@ -316,7 +368,7 @@ async function setupDomain(domain, port) {
     }
   `;
 
-	// Write Nginx config to the sites-available  and sites-enabled directories
+	// Write Nginx config to the sites-available and sites-enabled directories
 	const tempFilePath = `/tmp/${domain}.conf`;
 	fs.writeFileSync(tempFilePath, nginxConfig, { mode: 0o644 });
 
@@ -1084,24 +1136,44 @@ program
 	.action(async (cmd) => {
 		try {
 			let { username, token, packageManager } = cmd || config.github || {};
-			if (!username || !token || !packageManager) {
+
+			// Check if details are already configured
+			if (config.github?.username && config.github?.access_token && config.packageManager) {
+				const { updateConfig } = await inquirer.prompt([
+					{
+						type: 'list',
+						name: 'updateConfig',
+						message: 'GitHub details are already configured. What would you like to do?',
+						choices: ['Keep existing configuration', 'Update configuration']
+					}
+				]);
+
+				if (updateConfig === 'Keep existing configuration') {
+					username = config.github.username;
+					token = config.github.access_token;
+					packageManager = config.packageManager;
+					return;
+				}
+			}
+
+			if (!username || !token || !packageManager || updateConfig === 'Update configuration') {
 				const answers = await inquirer.prompt([
 					{
 						name: "username",
 						message: "Enter your GitHub username:",
-						default: username,
+						default: username || config.github?.username,
 					},
 					{
 						name: "token",
 						message: "Enter your GitHub personal access token:",
-						default: token,
+						default: token || config.github?.access_token,
 					},
 					{
 						type: "list",
 						name: "packageManager",
 						message: "Choose your package manager:",
 						choices: ["npm", "bun"],
-						default: packageManager,
+						default: packageManager || config.packageManager,
 					},
 				]);
 
@@ -1114,6 +1186,67 @@ program
 				config.github = { username, access_token: token };
 				config.packageManager = packageManager;
 				saveConfig(config);
+
+				// Check if git is installed
+				try {
+					execSync("git --version", { stdio: "ignore" });
+				} catch (error) {
+					log(chalk.yellow("Git is not installed. Installing..."));
+					execSync("sudo apt install git -y", { stdio: "inherit" });
+				}
+
+				// Check if curl is installed (needed for some package managers)
+				try {
+					execSync("curl --version", { stdio: "ignore" });
+				} catch (error) {
+					log(chalk.yellow("curl is not installed. Installing..."));
+					execSync("sudo apt install curl -y", { stdio: "inherit" });
+				}
+
+				// Install package manager if needed
+				if (packageManager === "bun") {
+					try {
+						execSync("bun --version", { stdio: "ignore" });
+					} catch (error) {
+						log(chalk.yellow("Bun is not installed. Installing..."));
+						execSync("curl -fsSL https://bun.sh/install | bash", { stdio: "inherit" });
+						// Source the updated PATH 
+						execSync(". ~/.bashrc", { stdio: "inherit" });
+					}
+				} else {
+					// Check for npm
+					try {
+						execSync("npm --version", { stdio: "ignore" });
+					} catch (error) {
+						log(chalk.yellow("npm is not installed. Installing Node.js and npm..."));
+						execSync("curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -", { stdio: "inherit" });
+						execSync("sudo apt install -y nodejs", { stdio: "inherit" });
+					}
+				}
+
+				// Check if PM2 is installed
+				try {
+					execSync("pm2 --version", { stdio: "ignore" });
+				} catch (error) {
+					log(chalk.yellow("PM2 is not installed. Installing..."));
+					execSync("sudo npm install -g pm2", { stdio: "inherit" });
+				}
+
+				// Check if nginx is installed
+				try {
+					execSync("nginx -v", { stdio: "ignore" });
+				} catch (error) {
+					log(chalk.yellow("nginx is not installed. Installing..."));
+					execSync("sudo apt install nginx -y", { stdio: "inherit" });
+				}
+
+				// Check if certbot is installed
+				try {
+					execSync("certbot --version", { stdio: "ignore" });
+				} catch (error) {
+					log(chalk.yellow("certbot is not installed. Installing..."));
+					execSync("sudo apt install certbot python3-certbot-nginx -y", { stdio: "inherit" });
+				}
 
 				// Check if the webhook server is already running
 				if (config.webhook?.pm2Name) {
@@ -1486,8 +1619,8 @@ program
 						`⚠️ Directory ${chalk
 							.hex("#FFA500")
 							.bold(repoPath)} exists and is not empty. Use ${chalk.green(
-							"manage",
-						)} to manage the project.`,
+								"manage",
+							)} to manage the project.`,
 					);
 					process.exit(1);
 				}
@@ -1699,8 +1832,7 @@ program
 			});
 
 			log(
-				`${projectType} project deployed successfully${
-					port ? ` on port ${port}` : ""
+				`${projectType} project deployed successfully${port ? ` on port ${port}` : ""
 				}`,
 			);
 		} catch (error) {
@@ -2044,137 +2176,95 @@ program
 			]);
 
 			if (action === "Add Domain") {
-				await handleAddDomain(projects);
+				const { project, domain } = await inquirer.prompt([
+					{
+						type: "list",
+						name: "project",
+						message: "Select a project to associate the domain with:",
+						choices: projects.map((p) => p.repo),
+					},
+					{
+						type: "input",
+						name: "domain",
+						message: "Enter domain to add to the project:",
+						validate: (input) => {
+							// Basic domain validation
+							const domainRegex = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+							return domainRegex.test(input)
+								? true
+								: "Please enter a valid domain.";
+						},
+					},
+				]);
+
+				const selectedProject = projects.find((p) => p.repo === project);
+				if (!selectedProject) {
+					log(chalk.red("Error: Selected project not found."));
+					return;
+				}
+
+				// setup the domain (add to nginx, certbot)
+				await setupDomain(domain, selectedProject.port);
+
+				// Update the config file with the new domain
+				const projectPid = selectedProject.pid;
+
+				if (!config.domains) {
+					config.domains = [];
+				}
+
+				config.domains.push({ pid: projectPid, domain });
+				saveConfig(config);
+
+				log(
+					chalk.green(
+						`Domain ${domain} added successfully to project ${selectedProject.repo}.`,
+					),
+				);
+				log(chalk.green(`You can now access your project at https://${domain}`));
+				log(
+					`Please make sure your domain is pointing to this server's IP address. It may take up to 48 hours for DNS changes to take effect.`,
+				);
 			} else if (action === "Remove Domain") {
-				await handleRemoveDomain(projects);
+				const { project } = await inquirer.prompt([
+					{
+						type: "list",
+						name: "project",
+						message: "Select the project you want to remove a domain from:",
+						choices: projects.map((p) => p.repo),
+					},
+				]);
+
+				const selectedProject = projects.find((p) => p.repo === project);
+
+				if (!selectedProject) {
+					log(chalk.red("Error: Selected project not found."));
+					return;
+				}
+
+				const projectDomains = config.domains.filter(
+					(d) => d.pid === selectedProject.pid,
+				);
+				if (projectDomains.length === 0) {
+					log(chalk.red("Error: Selected project has no associated domains."));
+					return;
+				}
+
+				const { domain } = await inquirer.prompt([
+					{
+						type: "list",
+						name: "domain",
+						message: "Select the domain you want to remove:",
+						choices: projectDomains.map((d) => d.domain),
+					},
+				]);
+
+				await removeDomain(domain);
 			}
 		} catch (error) {
 			console.error(chalk.red(`Error: ${error.message}`));
 		}
 	});
-
-// Function to add a new domain or subdomain and configure Nginx and SSL
-async function handleAddDomain(projects) {
-	try {
-		const { project, domain } = await inquirer.prompt([
-			{
-				type: "list",
-				name: "project",
-				message: "Select a project to associate the domain with:",
-				choices: projects.map((p) => p.repo),
-			},
-			{
-				type: "input",
-				name: "domain",
-				message: "Enter the domain or subdomain you want to add:",
-				validate: (input) => {
-					// Basic domain validation
-					const domainRegex = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-					return domainRegex.test(input)
-						? true
-						: "Please enter a valid domain.";
-				},
-			},
-		]);
-
-		const selectedProject = projects.find((p) => p.repo === project);
-		if (!selectedProject) {
-			log(chalk.red("Error: Selected project not found."));
-			return;
-		}
-
-		// a function for domain setup
-		await setupDomain(domain, selectedProject.port);
-
-		// Update the config file with the new domain
-		const projectPid = selectedProject.pid;
-
-		if (!config.domains) {
-			config.domains = [];
-		}
-
-		if (config.domains.some((d) => d.domain === domain)) {
-			log(chalk.red(`Domain ${domain} already exists.`));
-			return;
-		}
-
-		config.domains.push({ pid: projectPid, domain });
-		saveConfig(config);
-		log(
-			chalk.green(
-				`Domain ${domain} added successfully to project ${selectedProject.repo}.`,
-			),
-		);
-		log(chalk.green(`You can now access your project at https://${domain}`));
-		log(
-			`Please make sure your domain is pointing to this server's IP address. It may take up to 48 hours for DNS changes to take effect.`,
-		);
-	} catch (error) {
-		console.error(chalk.red(`Failed to add domain: ${error.message}`));
-	}
-}
-
-// Function to remove a domain or subdomain and delete Nginx and Certbot configuration files
-async function handleRemoveDomain(projects) {
-	try {
-		const { project } = await inquirer.prompt([
-			{
-				type: "list",
-				name: "project",
-				message: "Select the project you want to remove a domain from:",
-				choices: projects.map((p) => p.repo),
-			},
-		]);
-
-		const selectedProject = projects.find((p) => p.repo === project);
-		if (!selectedProject) {
-			log(chalk.red("Error: Selected project not found."));
-			return;
-		}
-
-		const projectDomains = config.domains.filter(
-			(d) => d.pid === selectedProject.pid,
-		);
-		if (projectDomains.length === 0) {
-			log(chalk.red("Error: Selected project has no associated domains."));
-			return;
-		}
-
-		const { domain } = await inquirer.prompt([
-			{
-				type: "list",
-				name: "domain",
-				message: "Select the domain you want to remove:",
-				choices: projectDomains.map((d) => d.domain),
-			},
-		]);
-
-		// Remove Nginx configuration
-		const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
-		if (fs.existsSync(nginxConfigPath)) {
-			const command = `sudo rm -f ${nginxConfigPath} /etc/nginx/sites-enabled/${domain}`;
-			execSync(command, { stdio: "inherit" });
-			execSync("sudo service nginx restart", { stdio: "inherit" });
-			log(chalk.green(`Nginx configuration removed for ${domain}.`));
-		}
-
-		// Remove SSL certificate using Certbot
-		const certbotCommand = `sudo certbot delete --cert-name ${domain}`;
-		execSync(certbotCommand, { stdio: "inherit" });
-		log(chalk.green(`SSL certificate removed for ${domain}.`));
-
-		// Update the config file and remove the domain from the config
-		config.domains = config.domains.filter((d) => d.domain !== domain);
-		saveConfig(config);
-		log(
-			chalk.green(
-				`Domain ${domain} removed successfully from project ${project}.`,
-			),
-		);
-	} catch (error) {
-		console.error(chalk.red(`Failed to remove domain: ${error.message}`));
-	}
-}
 
 // Function to list all domains and their associated projects
 async function handleListDomains(projects) {
