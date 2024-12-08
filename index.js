@@ -1485,8 +1485,18 @@ program
 					await handleDashboardCredentials();
 				}
 			}
+		};
 
-			log(chalk.green(`Dashboard running at: ${config.webhook.webhookUrl.replace("/webhook", "")}/dashboard`));
+		const handleUpdate = async () => {
+			try {
+				log(chalk.yellow("Updating webhook server..."));
+				execSync(`cd ${webhookPath} && git pull`, { stdio: "inherit" });
+				execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
+				await handleRestart();
+				log(chalk.green("Webhook server updated successfully."));
+			} catch (error) {
+				log(chalk.red(`Failed to update webhook server: ${error.message}`));
+			}
 		};
 
 		if (isWebhookServerRunning()) {
@@ -1495,7 +1505,8 @@ program
 				"Check Status": handleCheckStatus,
 				"Stop": handleStop,
 				"Show Logs": handleShowLogs,
-				"Dashboard": handleDashboard
+				"Dashboard": handleDashboard,
+				"Update": handleUpdate
 			};
 
 			const { action } = await inquirer.prompt([{
