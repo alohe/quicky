@@ -16,6 +16,7 @@ import latestVersion from "latest-version";
 import semver from "semver";
 import { fileURLToPath } from "node:url";
 import axios from "axios";
+import bcrypt from "bcrypt";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -185,14 +186,14 @@ async function setupDomain(domain, port) {
 	const domainExists = (config.domains || []).some((d) => d.domain === domain);
 
 	if (domainExists) {
-		const answer = await prompts({
-			type: 'confirm',
-			name: 'overwrite',
+		const { overwrite } = await inquirer.prompt([{
+			type: "confirm",
+			name: "overwrite",
 			message: `Domain ${domain} already exists. Do you want to overwrite and reconfigure it?`,
-			initial: false
-		});
+			default: false
+		}]);
 
-		if (!answer.overwrite) {
+		if (!overwrite) {
 			throw new Error('Domain configuration cancelled by user');
 		}
 
