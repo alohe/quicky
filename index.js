@@ -1486,8 +1486,7 @@ program
 				}
 			}
 
-			log(chalk.green(`Opening dashboard at: ${config.webhook.webhookUrl}/dashboard`));
-			execSync(`open ${config.webhook.webhookUrl}/dashboard`);
+			log(chalk.green(`Dashboard running at: ${config.webhook.webhookUrl.replace("/webhook", "")}/dashboard`));
 		};
 
 		if (isWebhookServerRunning()) {
