@@ -224,25 +224,9 @@ async function setupDomain(domain, port) {
 		}
 	}
 
-	// Check if domain is pointing to the server's IP address using dig
-	const checkDomainPointing = async (domain) => {
-		let digResult = "";
-		const spinner = createSpinner(
-			`Checking if ${domain} points to this server...`,
-		).start();
-		while (!digResult) {
-			digResult = execSync(`dig +short ${domain}`).toString().trim();
-			if (!digResult) {
-				spinner.update({
-					text: `Waiting for ${domain} to point to this server...`,
-				});
-				await sleep(30000); // Wait for 30 seconds before checking again
-			}
-		}
-		spinner.success({ text: `${domain} is now pointing to this server.` });
-	};
-
-	await checkDomainPointing(domain);
+	// Inform user to ensure domain points to server
+	log(chalk.yellow(`Please ensure that ${domain} is pointing to this server's IPv4 address before proceeding.`));
+	log(chalk.yellow('You can do this by updating your domain\'s DNS A record.'));
 
 	const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
 	const nginxSymlinkPath = `/etc/nginx/sites-enabled/${domain}`;
@@ -1112,6 +1096,7 @@ program
 				// Uninstall the CLI tool
 				try {
 					execSync("sudo npm uninstall -g quicky", { stdio: "inherit" });
+					execSync("hash -r", { stdio: "inherit" });
 					log(chalk.green("✔ Quicky has been uninstalled successfully."));
 				} catch (error) {
 					log(chalk.red(`Failed to uninstall Quicky: ${error.message}`));
@@ -1348,6 +1333,20 @@ program
 	.action(async () => {
 		const webhookPath = `${defaultFolder}/webhook`;
 
+		// Check if pm2 is installed
+		try {
+			execSync('pm2 -v', { stdio: 'pipe' });
+		} catch (error) {
+			log(chalk.yellow("PM2 is not installed. Installing PM2..."));
+			try {
+				execSync('npm install -g pm2', { stdio: 'inherit' });
+				log(chalk.green("PM2 installed successfully."));
+			} catch (error) {
+				log(chalk.red("Failed to install PM2. Please install it manually using 'npm install -g pm2'"));
+				process.exit(1);
+			}
+		}
+
 		const isWebhookServerRunning = () => {
 			try {
 				const pm2Status = execSync(`pm2 describe ${config.webhook.pm2Name}`, {
@@ -1359,79 +1358,154 @@ program
 			}
 		};
 
-		if (isWebhookServerRunning()) {
-			const { action } = await inquirer.prompt([
-				{
-					type: "list",
-					name: "action",
-					message: "Webhook server is running. What would you like to do?",
-					choices: ["Restart", "Check Status", "Stop", "Show Logs"],
-				},
-			]);
-
-			if (action === "Restart") {
-				try {
-					// Check if node_modules exists, if not run npm install
-					if (!fs.existsSync(`${webhookPath}/node_modules`)) {
-						log(chalk.yellow("node_modules not found. Running npm install..."));
-						execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
-					}
-
-					execSync(`pm2 restart ${config.webhook.pm2Name}`, {
-						stdio: "inherit",
-					});
-					log(chalk.green("Webhook server restarted successfully."));
-				} catch (error) {
-					log(chalk.red(`Failed to restart webhook server: ${error.message}`));
+		const handleRestart = async () => {
+			try {
+				if (!fs.existsSync(`${webhookPath}/node_modules`)) {
+					log(chalk.yellow("node_modules not found. Running npm install..."));
+					execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
 				}
-			} else if (action === "Check Status") {
+				
+				// First check if process exists
 				try {
-					const pm2Status = execSync(`pm2 describe ${config.webhook.pm2Name}`, {
-						stdio: "pipe",
-					}).toString();
-
-					if (pm2Status.includes("online")) {
-						log(chalk.green("Webhook server is running."));
-					} else {
-						log(chalk.red("Webhook server is not running."));
-					}
+					execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" });
+					execSync(`pm2 restart ${config.webhook.pm2Name}`, { stdio: "inherit" });
 				} catch (error) {
-					log(
-						chalk.red(
-							`Failed to check webhook server status: ${error.message}`,
-						),
-					);
+					// Process doesn't exist, start it instead
+					await setupWebhookServer();
 				}
-			} else if (action === "Stop") {
+				
+				log(chalk.green("Webhook server restarted successfully."));
+				log(chalk.green(`Dashboard available at: http://localhost:${config.webhook.webhookPort}/dashboard`));
+			} catch (error) {
+				log(chalk.red(`Failed to restart webhook server: ${error.message}`));
+			}
+		};
+
+		const handleCheckStatus = async () => {
+			try {
+				const pm2Status = execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" }).toString();
+				if (pm2Status.includes("online")) {
+					log(chalk.green("Webhook server is running."));
+					log(chalk.green(`Dashboard available at: http://localhost:${config.webhook.webhookPort}/dashboard`));
+				} else {
+					log(chalk.red("Webhook server is not running."));
+				}
+			} catch (error) {
+				log(chalk.red("Webhook server is not running."));
+			}
+		};
+
+		const handleStop = async () => {
+			try {
+				// First check if process exists
+				execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" });
+				
+				// If it exists, stop and delete it
 				try {
-					execSync(`pm2 stop ${config.webhook.pm2Name}`, {
-						stdio: "inherit",
-					});
+					execSync(`pm2 stop ${config.webhook.pm2Name}`, { stdio: "pipe" });
+					execSync(`pm2 delete ${config.webhook.pm2Name}`, { stdio: "pipe" });
 					log(chalk.green("Webhook server stopped successfully."));
 				} catch (error) {
 					log(chalk.red(`Failed to stop webhook server: ${error.message}`));
 				}
-			} else if (action === "Show Logs") {
-				try {
-					const { logType } = await inquirer.prompt([
-						{
-							type: "list",
-							name: "logType",
-							message: "Which logs would you like to see?",
-							choices: ["Output Logs", "Error Logs"],
-						},
-					]);
+			} catch (error) {
+				// Process doesn't exist
+				log(chalk.yellow("Webhook server is not running."));
+			}
+		};
 
-					const logCommand =
-						logType === "Output Logs"
-							? `pm2 logs ${config.webhook.pm2Name} --lines 100`
-							: `pm2 logs ${config.webhook.pm2Name} --err --lines 100`;
+		const handleShowLogs = async () => {
+			try {
+				// First check if process exists
+				execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" });
+				
+				const { logType } = await inquirer.prompt([{
+					type: "list",
+					name: "logType",
+					message: "Which logs would you like to see?",
+					choices: ["Output Logs", "Error Logs"]
+				}]);
 
-					execSync(logCommand, { stdio: "inherit" });
-				} catch (error) {
-					log(chalk.red(`Failed to show logs: ${error.message}`));
+				const logCommand = logType === "Output Logs"
+					? `pm2 logs ${config.webhook.pm2Name} --lines 100`
+					: `pm2 logs ${config.webhook.pm2Name} --err --lines 100`;
+
+				execSync(logCommand, { stdio: "inherit" });
+			} catch (error) {
+				log(chalk.yellow("Webhook server is not running. No logs available."));
+			}
+		};
+
+		const handleDashboardCredentials = async () => {
+			const { username, password } = await inquirer.prompt([
+				{
+					type: "input",
+					name: "username",
+					message: "Enter dashboard username:",
+					default: config.dashboard?.username || "admin"
+				},
+				{
+					type: "password",
+					name: "password",
+					message: "Enter dashboard password:"
+				}
+			]);
+
+			const hashedPassword = await bcrypt.hash(password, 10);
+			config.dashboard = { username, password: hashedPassword };
+			fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+			log(chalk.green("Dashboard credentials saved successfully."));
+		};
+
+		const handleDashboard = async () => {
+			if (!config.dashboard?.username || !config.dashboard?.password) {
+				const { setupDashboard } = await inquirer.prompt([{
+					type: "confirm",
+					name: "setupDashboard",
+					message: "Dashboard credentials not found. Would you like to set them up now?",
+					default: true
+				}]);
+
+				if (setupDashboard) {
+					await handleDashboardCredentials();
+				} else {
+					log(chalk.yellow("Dashboard access requires credentials to be set up."));
+					return;
+				}
+			} else {
+				const { updateCredentials } = await inquirer.prompt([{
+					type: "confirm",
+					name: "updateCredentials",
+					message: "Would you like to update the dashboard credentials?",
+					default: false
+				}]);
+
+				if (updateCredentials) {
+					await handleDashboardCredentials();
 				}
 			}
+
+			log(chalk.green(`Opening dashboard at: ${config.webhook.webhookUrl}/dashboard`));
+			execSync(`open ${config.webhook.webhookUrl}/dashboard`);
+		};
+
+		if (isWebhookServerRunning()) {
+			const actionHandlers = {
+				"Restart": handleRestart,
+				"Check Status": handleCheckStatus,
+				"Stop": handleStop,
+				"Show Logs": handleShowLogs,
+				"Dashboard": handleDashboard
+			};
+
+			const { action } = await inquirer.prompt([{
+				type: "list",
+				name: "action",
+				message: "Webhook server is running. What would you like to do?",
+				choices: Object.keys(actionHandlers)
+			}]);
+
+			await actionHandlers[action]();
 		} else {
 			await setupWebhookServer();
 		}
