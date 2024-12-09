@@ -855,9 +855,12 @@ async function updateProject(project, promptEnv = false) {
 			fs.moveSync(tempPath, repoPath, { overwrite: true });
 
 			// Check if the main entry file exists before starting
-			const entryFile = `${repoPath}/index.js`;
-			if (!fs.existsSync(entryFile)) {
-				throw new Error(`Entry file ${entryFile} not found`);
+			const packageJsonPath = `${repoPath}/package.json`;
+			let mainFile = 'index.js';
+
+			if (fs.existsSync(packageJsonPath)) {
+				const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+				mainFile = packageJson.main || 'index.js';
 			}
 
 			log("Starting the project...");
@@ -867,12 +870,9 @@ async function updateProject(project, promptEnv = false) {
 			if (project.type === "next.js") {
 				startCommand = `pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`;
 			} else {
-				// Read package.json to get the main entry file
-				const packageJsonPath = `${repoPath}/package.json`;
-				let mainFile = 'index.js';
-				if (fs.existsSync(packageJsonPath)) {
-					const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-					mainFile = packageJson.main || 'index.js';
+				const entryFile = `${repoPath}/${mainFile}`;
+				if (!fs.existsSync(entryFile)) {
+					throw new Error(`Entry file ${entryFile} not found. Please check that the "main" field in your package.json points to the correct entry file, or ensure index.js exists in the root directory.`);
 				}
 				startCommand = project.port
 					? `pm2 start ${mainFile} --name "${project.repo}" -- --port ${project.port}`
