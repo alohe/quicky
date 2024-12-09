@@ -867,9 +867,16 @@ async function updateProject(project, promptEnv = false) {
 			if (project.type === "next.js") {
 				startCommand = `pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`;
 			} else {
+				// Read package.json to get the main entry file
+				const packageJsonPath = `${repoPath}/package.json`;
+				let mainFile = 'index.js';
+				if (fs.existsSync(packageJsonPath)) {
+					const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+					mainFile = packageJson.main || 'index.js';
+				}
 				startCommand = project.port
-					? `pm2 start index.js --name "${project.repo}" -- --port ${project.port}`
-					: `pm2 start index.js --name "${project.repo}"`;
+					? `pm2 start ${mainFile} --name "${project.repo}" -- --port ${project.port}`
+					: `pm2 start ${mainFile} --name "${project.repo}"`;
 			}
 
 			// Start the project
