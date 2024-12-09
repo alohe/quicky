@@ -840,7 +840,8 @@ async function updateProject(project, promptEnv = false) {
 					if (fs.existsSync(backupPath)) {
 						fs.removeSync(backupPath); // Remove existing backup if any
 					}
-					fs.renameSync(repoPath, backupPath);
+					// Use fs-extra's moveSync instead of renameSync for better cross-platform support
+					fs.moveSync(repoPath, backupPath, { overwrite: true });
 					spinner.success({ text: "Backup created." });
 				}
 			} catch (err) {
@@ -850,8 +851,14 @@ async function updateProject(project, promptEnv = false) {
 				spinner.stop();
 			}
 
-			// Move temp directory to project directory
-			fs.renameSync(tempPath, repoPath);
+			// Move temp directory to project directory using moveSync
+			fs.moveSync(tempPath, repoPath, { overwrite: true });
+
+			// Check if the main entry file exists before starting
+			const entryFile = `${repoPath}/index.js`;
+			if (!fs.existsSync(entryFile)) {
+				throw new Error(`Entry file ${entryFile} not found`);
+			}
 
 			log("Starting the project...");
 
@@ -881,13 +888,23 @@ async function updateProject(project, promptEnv = false) {
 			} catch (startError) {
 				// Rollback if start fails
 				log(chalk.red(`Failed to start project: ${startError.message}`));
-				fs.renameSync(repoPath, `${repoPath}_failed`);
-				fs.renameSync(backupPath, repoPath);
-				log(
-					chalk.yellow(
-						`Project ${project.repo} has been rolled back due to startup failure.`,
-					),
-				);
+				try {
+					// Remove failed directory if it exists
+					if (fs.existsSync(`${repoPath}_failed`)) {
+						fs.removeSync(`${repoPath}_failed`);
+					}
+					// Move current repo to failed state
+					fs.moveSync(repoPath, `${repoPath}_failed`, { overwrite: true });
+					// Restore backup
+					fs.moveSync(backupPath, repoPath, { overwrite: true });
+					log(
+						chalk.yellow(
+							`Project ${project.repo} has been rolled back due to startup failure.`,
+						),
+					);
+				} catch (rollbackError) {
+					log(chalk.red(`Failed to rollback: ${rollbackError.message}`));
+				}
 				throw new Error(`Failed to start project: ${startError.message}`);
 			}
 
@@ -1365,7 +1382,7 @@ program
 					log(chalk.yellow("node_modules not found. Running npm install..."));
 					execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
 				}
-				
+
 				// First check if process exists
 				try {
 					execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" });
@@ -1374,7 +1391,7 @@ program
 					// Process doesn't exist, start it instead
 					await setupWebhookServer();
 				}
-				
+
 				log(chalk.green("Webhook server restarted successfully."));
 				log(chalk.green(`Dashboard available at: http://localhost:${config.webhook.webhookPort}/dashboard`));
 			} catch (error) {
@@ -1400,7 +1417,7 @@ program
 			try {
 				// First check if process exists
 				execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" });
-				
+
 				// If it exists, stop and delete it
 				try {
 					execSync(`pm2 stop ${config.webhook.pm2Name}`, { stdio: "pipe" });
@@ -1419,7 +1436,7 @@ program
 			try {
 				// First check if process exists
 				execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" });
-				
+
 				const { logType } = await inquirer.prompt([{
 					type: "list",
 					name: "logType",
