@@ -9,6 +9,9 @@ A CLI tool that streamlines the deployment and management of self-hosted Next.js
 - 🔄 **Project Maintenance**: Easily update or remove deployed projects.
 - 🌐 **Domain & SSL Automation**: Automatically configure Nginx for custom domains and SSL certificates, allowing you to add/remove domains from your projects.
 - 📝 **Configuration Overview**: List and inspect details of all deployed projects and their domains.
+- 🔧 **Webhook Management**: Set up, manage, and update webhooks for automated deployments.
+- 📊 **Dashboard Access**: Manage and monitor your webhook server through a web-based dashboard.
+- 🔍 **Log Management**: View output and error logs for your webhook server.
 
 ## Prerequisites
 
@@ -140,11 +143,59 @@ This command allows you to effortlessly **add** and **remove** domains and subdo
 
 ### 7. Webhooks
 
-```bash
-quicky webhooks
-```
+Quicky provides a built-in webhook server to automatically update your projects when changes are pushed to GitHub. Here's how to set it up:
 
-This command allows you to manage the webhook server for your projects. You can **restart** the webhook server, check its **status**, **stop** it, or **show logs**.
+#### Setting Up the Webhook Server
+
+1. **Prerequisites**
+   - Ensure you have a subdomain (e.g., webhook.example.com) pointing to your server's IP address
+   - Add an A DNS record with your server's IPv4 address
+
+2. **Initial Setup**
+   ```bash
+   quicky webhooks
+   ```
+   This command will:
+   - Check if the webhook server is running
+   - Guide you through the setup process if needed
+   - Prompt for webhook configuration
+
+3. **Configuration**
+   - You'll need to provide a webhook URL (format: https://<your-subdomain>/webhook)
+   - The webhook server will start automatically after setup
+
+4. **Verify Setup**
+   ```bash
+   quicky webhooks status
+   ```
+   This shows:
+   - Server running status
+   - Options to restart/stop server
+   - Access to server logs
+
+#### Webhook Dashboard
+
+1. **Setup Dashboard Access**
+   ```bash
+   quicky webhooks dashboard
+   ```
+   - Set up username and password
+   - Credentials are securely stored
+
+2. **Access Dashboard**
+   - Open your browser to https://<your-subdomain>/dashboard
+   - Log in with your credentials
+   - Monitor webhook status
+   - View webhook logs
+
+#### Managing Webhooks
+
+Use `quicky webhooks` with these commands:
+- `status` - Check webhook server status
+- `restart` - Restart the webhook server
+- `stop` - Stop the webhook server
+- `logs` - View webhook server logs
+- `dashboard` - Access the webhook dashboard
 
 ### 8. Upgrade Quicky
 
