@@ -2,7 +2,6 @@
 node_modules
 
 # Lock files
-package-lock.json
 bun.lockb
 
 # Logs

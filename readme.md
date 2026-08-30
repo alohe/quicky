@@ -80,7 +80,7 @@ Follow the prompts to select your Next.js repository. Quicky will handle the dep
 
 Before deploying a Node.js project, ensure that your main application file is named `index.js`. You have the option to specify whether your project will use a port:
 
-- **With Port**: Provide the port number (e.g., 3000). Quicky will save it in the `.env` file, allowing you to point domains to your project.
+- **With Port**: Provide the port number (e.g., 3000). Quicky will set it as the `PORT` environment variable via the PM2 ecosystem file, allowing you to point domains to your project.
 - **Without Port**: Without specifying a port, domains cannot be directed to the project, causing it to operate solely as a background service.
 
 This command will prompt you to provide:
@@ -92,7 +92,7 @@ This command will prompt you to provide:
   - Whether your project uses a port
     - If yes, the port number on which the project should run (e.g., 3000)
 
-**Environment Variables** - During deployment, you'll be asked whether you'd like to add environment variables to your project. Quicky will handle saving the port number in the `.env` file of your project if applicable.
+**Environment Variables** - During deployment, you'll be asked whether you'd like to add environment variables to your project. The port is passed to your app via the `PORT` environment variable in the PM2 ecosystem config.
 
 ### 3. Manage Projects
 
@@ -215,7 +215,7 @@ Removes Quicky from your system.
 
 ## License
 
-This project is licensed under the MIT License - see the [`LICENSE`](LICENSE) file for details.
+This project is licensed under the MIT License — see the [`LICENSE`](LICENSE) file for details.
 
 ## Author
 

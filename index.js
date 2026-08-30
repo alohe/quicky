@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import inquirer from "inquirer";
-import { execSync } from "node:child_process";
-import simpleGit from "simple-git";
+import { execSync, execFileSync } from "node:child_process";
 import fs from "fs-extra";
 import chalk from "chalk";
 import { createSpinner } from "nanospinner";
@@ -16,7 +15,53 @@ import latestVersion from "latest-version";
 import semver from "semver";
 import { fileURLToPath } from "node:url";
 import axios from "axios";
-import bcrypt from "bcrypt";
+import bcryptjs from "bcryptjs";
+
+import {
+	DEFAULT_FOLDER,
+	PROJECTS_DIR,
+	TEMP_DIR,
+	CONFIG_PATH,
+	readConfig,
+	writeConfig,
+	withConfig,
+} from "./src/config.js";
+
+import { validateName, validatePort } from "./src/validate.js";
+
+import {
+	buildEcosystemFile,
+	pm2Save,
+	pm2Startup,
+	getPm2Status,
+	pm2DeleteIfExists,
+	pm2StartEcosystem,
+	pm2Reload,
+} from "./src/pm2.js";
+
+import {
+	ensureReleaseLayout,
+	createReleaseDir,
+	linkSharedPaths,
+	swapRelease,
+	rollbackRelease,
+	pruneReleases,
+	getCurrentRelease,
+	getProjectRoot,
+	getSharedDir,
+	getCurrentSymlink,
+} from "./src/release.js";
+
+import { waitForHealthy } from "./src/health.js";
+
+import {
+	ensureMirror,
+	checkoutFromMirror,
+	getMirrorHeadSha,
+	cloneWithAskPass,
+} from "./src/git.js";
+
+import { migrateIfNeeded } from "./src/migration.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,23 +71,58 @@ const program = new Command();
 const packagePath = path.resolve(__dirname, "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
 
+migrateIfNeeded();
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const log = console.log;
+
+// ---------------------------------------------------------------------------
+// Self-update check (skipped in non-TTY, with 24h cache + request timeout)
+// ---------------------------------------------------------------------------
+
+const UPDATE_CACHE_PATH = path.join(DEFAULT_FOLDER, ".update-check");
+const UPDATE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
 function updateCLI() {
 	try {
 		execSync("sudo npm install -g quicky", { stdio: "inherit" });
-		console.log(chalk.green("Quicky has been upgraded to the latest version."));
+		console.log(
+			chalk.green("Quicky has been upgraded to the latest version."),
+		);
 	} catch (error) {
 		console.error(chalk.red(`Failed to upgrade Quicky: ${error.message}`));
 	}
 }
 
 async function checkForUpdates() {
+	if (!process.stdout.isTTY) return;
+
 	try {
+		const now = Date.now();
+		if (fs.existsSync(UPDATE_CACHE_PATH)) {
+			const cached = JSON.parse(
+				fs.readFileSync(UPDATE_CACHE_PATH, "utf-8"),
+			);
+			if (now - cached.ts < UPDATE_CACHE_TTL_MS) return;
+		}
+	} catch {
+		/* corrupted cache, proceed with check */
+	}
+
+	try {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), 5_000);
 		const latest = await latestVersion("quicky");
+		clearTimeout(timer);
+
+		fs.writeFileSync(
+			UPDATE_CACHE_PATH,
+			JSON.stringify({ ts: Date.now(), version: latest }),
+		);
+
 		if (semver.gt(latest, packageJson.version)) {
 			console.log(
-				`\n🚀 A new version of Quicky (v${chalk.bold.blue(
-					latest,
-				)}) is available!`,
+				`\n🚀 A new version of Quicky (v${chalk.bold.blue(latest)}) is available!`,
 			);
 
 			const { shouldUpgrade } = await inquirer.prompt([
@@ -59,206 +139,167 @@ async function checkForUpdates() {
 				updateCLI();
 			} else {
 				console.log(
-					chalk.yellow("You can upgrade later by running 'quicky upgrade'."),
+					chalk.yellow(
+						"You can upgrade later by running 'quicky upgrade'.",
+					),
 				);
 			}
 		}
-	} catch (error) {
-		console.error("Error checking for updates:", error);
+	} catch {
+		/* network errors are non-fatal */
 	}
 }
 
-// Check for updates after the command execution
 program.hook("postAction", async () => {
 	const excludedCommands = ["upgrade", "uninstall"];
 	const command = process.argv[2];
-
 	if (!excludedCommands.includes(command)) {
 		await checkForUpdates();
 	}
 });
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const log = console.log;
-const homeDir = os.homedir();
-const defaultFolder = path.join(homeDir, ".quicky");
-const projectsDir = `${defaultFolder}/projects`;
-const tempDir = `${defaultFolder}/temp`;
-const configPath = `${defaultFolder}/config.json`;
+// ---------------------------------------------------------------------------
+// Domain helpers
+// ---------------------------------------------------------------------------
 
-// Ensure directories exist
-if (!fs.existsSync(projectsDir)) {
-	fs.mkdirSync(projectsDir, { recursive: true });
-}
-
-if (!fs.existsSync(configPath)) {
-	fs.writeFileSync(configPath, JSON.stringify({ projects: [] }, null, 2));
-}
-
-// Read configuration file once
-const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-
-// Function to save the configuration file
-const saveConfig = (config) => {
-	fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-};
-
-// Function to update the projects configuration file
-const updateProjectsConfig = ({
-	pid = uuidv4().slice(0, 5),
-	owner,
-	repo,
-	port,
-	webhookId,
-	type = "next.js",
-}) => {
-	const project = {
-		pid,
-		owner,
-		repo,
-		port,
-		webhookId,
-		type,
-		last_updated: new Date().toISOString(),
-	};
-	const existing = config.projects.find((p) => p.repo === repo);
-
-	if (existing) {
-		existing.port = port;
-		existing.owner = owner;
-		existing.type = type;
-		existing.last_updated = new Date().toISOString();
-	} else {
-		config.projects.push(project);
-	}
-
-	saveConfig(config);
-};
-
-
-// Function to remove a domain or subdomain and delete Nginx and Certbot configuration files
 async function removeDomain(domain) {
-	// Remove Nginx configuration
 	const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
 	if (fs.existsSync(nginxConfigPath)) {
-		const command = `sudo rm -f ${nginxConfigPath} /etc/nginx/sites-enabled/${domain}`;
-		execSync(command, { stdio: "inherit" });
+		execFileSync("sudo", ["rm", "-f", nginxConfigPath, `/etc/nginx/sites-enabled/${domain}`], { stdio: "inherit" });
 		execSync("sudo service nginx restart", { stdio: "inherit" });
 		log(chalk.green(`Nginx configuration removed for ${domain}.`));
 	}
 
-	// Remove SSL certificate using Certbot
-	const certbotCommand = `sudo certbot delete --cert-name ${domain}`;
-	execSync(certbotCommand, { stdio: "inherit" });
-	log(chalk.green(`SSL certificate removed for ${domain}.`));
+	try {
+		execFileSync("sudo", ["certbot", "delete", "--cert-name", domain, "--non-interactive"], { stdio: "pipe" });
+		log(chalk.green(`SSL certificate removed for ${domain}.`));
+	} catch {
+		/* certificate may not exist */
+	}
 
-	// Update the config file and remove the domain from the config
-	config.domains = config.domains.filter((d) => d.domain !== domain);
-	saveConfig(config);
-	log(
-		chalk.green(
-			`Domain ${domain} removed successfully.`,
-		),
-	);
+	withConfig((config) => {
+		config.domains = (config.domains || []).filter(
+			(d) => d.domain !== domain,
+		);
+	});
+	log(chalk.green(`Domain ${domain} removed successfully.`));
 }
 
 async function setupDomain(domain, port) {
-	// Install Nginx if not already installed
 	try {
 		execSync("nginx -v", { stdio: "ignore" });
-	} catch (error) {
+	} catch {
 		execSync("sudo apt install nginx -y", { stdio: "inherit" });
 	}
 
-	// Install Certbot if not already installed
 	try {
 		execSync("certbot --version && certbot plugins | grep nginx", {
 			stdio: "ignore",
 		});
-	} catch (error) {
-		// If not installed, install certbot and the nginx plugin
+	} catch {
 		execSync("sudo apt install certbot python3-certbot-nginx -y", {
 			stdio: "inherit",
 		});
 	}
 
-	// Check if domain exists in config.json
-	const domainExists = (config.domains || []).some((d) => d.domain === domain);
+	const config = readConfig();
+	const domainExists = (config.domains || []).some(
+		(d) => d.domain === domain,
+	);
 
 	if (domainExists) {
-		const { overwrite } = await inquirer.prompt([{
-			type: "confirm",
-			name: "overwrite",
-			message: `Domain ${domain} already exists. Do you want to overwrite and reconfigure it?`,
-			default: false
-		}]);
+		const { overwrite } = await inquirer.prompt([
+			{
+				type: "confirm",
+				name: "overwrite",
+				message: `Domain ${domain} already exists. Do you want to overwrite and reconfigure it?`,
+				default: false,
+			},
+		]);
 
 		if (!overwrite) {
-			throw new Error('Domain configuration cancelled by user');
+			throw new Error("Domain configuration cancelled by user");
 		}
 
 		await removeDomain(domain);
-		log(chalk.green(`Existing configuration for ${domain} has been removed. Proceeding with new setup...`));
+		log(
+			chalk.green(
+				`Existing configuration for ${domain} has been removed. Proceeding with new setup...`,
+			),
+		);
 	} else {
-		// Check if nginx config exists for this domain and remove it
 		const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
 		const nginxSymlinkPath = `/etc/nginx/sites-enabled/${domain}`;
 
-		if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
-			log(chalk.yellow(`Found existing Nginx configuration for ${domain}, removing...`));
+		if (
+			fs.existsSync(nginxConfigPath) ||
+			fs.existsSync(nginxSymlinkPath)
+		) {
+			log(
+				chalk.yellow(
+					`Found existing Nginx configuration for ${domain}, removing...`,
+				),
+			);
 			try {
 				fs.unlinkSync(nginxSymlinkPath);
 				fs.unlinkSync(nginxConfigPath);
-			} catch (error) {
-				log(chalk.yellow(`Error removing existing files: ${error.message}`));
+			} catch {
+				/* files may not exist */
 			}
 		}
 
-		// Check and remove any existing SSL certificates
 		try {
-			execSync(`certbot delete --cert-name ${domain} --non-interactive`, {
+			execFileSync("certbot", ["delete", "--cert-name", domain, "--non-interactive"], {
 				stdio: "ignore",
 			});
 			log(chalk.yellow(`Removed existing SSL certificate for ${domain}`));
-		} catch (error) {
-			// Certificate doesn't exist, continue with setup
+		} catch {
+			/* certificate may not exist */
 		}
 	}
 
-	// Inform user to ensure domain points to server
-	log(chalk.yellow(`Please ensure that ${domain} is pointing to this server's IPv4 address before proceeding.`));
-	log(chalk.yellow('You can do this by updating your domain\'s DNS A record.'));
+	log(
+		chalk.yellow(
+			`Please ensure that ${domain} is pointing to this server's IPv4 address before proceeding.`,
+		),
+	);
+	log(
+		chalk.yellow(
+			"You can do this by updating your domain's DNS A record.",
+		),
+	);
 
 	const nginxConfigPath = `/etc/nginx/sites-available/${domain}`;
 	const nginxSymlinkPath = `/etc/nginx/sites-enabled/${domain}`;
 
-	// Remove existing Nginx configuration if it exists
-	if (fs.existsSync(nginxConfigPath) || fs.existsSync(nginxSymlinkPath)) {
-		log(chalk.yellow(`Found existing Nginx configuration for ${domain}, removing...`));
+	if (
+		fs.existsSync(nginxConfigPath) ||
+		fs.existsSync(nginxSymlinkPath)
+	) {
+		log(
+			chalk.yellow(
+				`Found existing Nginx configuration for ${domain}, removing...`,
+			),
+		);
 		try {
 			fs.unlinkSync(nginxSymlinkPath);
 			fs.unlinkSync(nginxConfigPath);
 		} catch (error) {
 			log(chalk.yellow(`Error removing existing files: ${error.message}`));
-			log(chalk.yellow('Continuing with setup...'));
+			log(chalk.yellow("Continuing with setup..."));
 		}
 	}
 
 	const zoneName = `zone_${uuidv4().slice(0, 5)}`;
 	const nginxConfig = `
-    # Rate limiting zone definition
     limit_req_zone $binary_remote_addr zone=${zoneName}:10m rate=30r/s;
 
     server {
       listen 80;
       server_name ${domain};
 
-      # Main location block for proxying to the application
       location / {
-        # Rate limiting with burst and delay
         limit_req zone=${zoneName} burst=10 delay=10;
-
-        # Proxy settings
         proxy_pass http://localhost:${port};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
@@ -268,23 +309,18 @@ async function setupDomain(domain, port) {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-NginX-Proxy true;
-
-        # Buffering and memory optimization
         proxy_buffering on;
         proxy_buffer_size 256k;
         proxy_buffers 8 256k;
         proxy_busy_buffers_size 512k;
         proxy_temp_file_write_size 512k;
         proxy_max_temp_file_size 1024m;
-
-        # Next.js specific configuration
         proxy_cache_bypass $http_upgrade;
         proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
         proxy_cache_valid 200 60m;
         proxy_cache_valid 404 1m;
       }
 
-      # Next.js static files location
       location /_next/static {
         proxy_pass http://localhost:${port};
         proxy_cache_bypass $http_upgrade;
@@ -293,7 +329,6 @@ async function setupDomain(domain, port) {
         add_header Cache-Control "public, no-transform, must-revalidate";
       }
 
-      # Static files location
       location /static {
         proxy_pass http://localhost:${port};
         proxy_cache_bypass $http_upgrade;
@@ -302,8 +337,7 @@ async function setupDomain(domain, port) {
         add_header Cache-Control "public, no-transform, must-revalidate";
       }
 
-      # Static asset caching with ETag and Last-Modified headers
-      location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+      location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
         proxy_pass http://localhost:${port};
         proxy_cache_bypass $http_upgrade;
         expires 7d;
@@ -314,35 +348,22 @@ async function setupDomain(domain, port) {
         log_not_found off;
       }
 
-      # Compression settings
       gzip on;
-      gzip_types 
-        text/plain 
-        text/css 
-        application/json 
-        application/javascript 
-        text/xml 
-        application/xml 
-        application/xml+rss 
-        text/javascript;
+      gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
       gzip_comp_level 6;
       gzip_min_length 1000;
 
-      # Connection timeouts
       proxy_connect_timeout 60s;
       proxy_send_timeout 60s;
       proxy_read_timeout 60s;
       keepalive_timeout 65s;
       keepalive_requests 100;
 
-      # Request size limit
       client_max_body_size 50M;
 
-      # Logging configuration
       access_log /var/log/nginx/${domain}-access.log combined buffer=512k flush=1m;
       error_log /var/log/nginx/${domain}-error.log warn;
 
-      # Security headers
       add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
       add_header X-Content-Type-Options "nosniff" always;
       add_header X-Frame-Options "SAMEORIGIN" always;
@@ -353,30 +374,26 @@ async function setupDomain(domain, port) {
     }
   `;
 
-	// Write Nginx config to the sites-available and sites-enabled directories
 	const tempFilePath = `/tmp/${domain}.conf`;
 	fs.writeFileSync(tempFilePath, nginxConfig, { mode: 0o644 });
 
-	execSync(`sudo mv ${tempFilePath} ${nginxConfigPath}`, {
+	execFileSync("sudo", ["mv", tempFilePath, nginxConfigPath], {
 		stdio: "inherit",
 	});
 
-	// Check if the symlink already exists
 	if (!fs.existsSync(nginxSymlinkPath)) {
-		// Create a symlink to the sites-enabled directory
-		execSync(`sudo ln -s ${nginxConfigPath} ${nginxSymlinkPath}`, {
+		execFileSync("sudo", ["ln", "-s", nginxConfigPath, nginxSymlinkPath], {
 			stdio: "inherit",
 		});
 	} else {
 		log(chalk.yellow(`Symlink already exists for ${domain}.`));
 	}
 
-	// Restart Nginx to apply the changes
 	execSync("sudo service nginx restart", { stdio: "inherit" });
-
 	log(chalk.green(`Nginx configuration created for ${domain}.`));
 
-	if (!config.email) {
+	let currentConfig = readConfig();
+	if (!currentConfig.email) {
 		const { email } = await inquirer.prompt([
 			{
 				type: "input",
@@ -384,41 +401,102 @@ async function setupDomain(domain, port) {
 				message: "Enter your email address for SSL certificate:",
 				validate: (input) => {
 					const emailRegex = /\S+@\S+\.\S+/;
-					return emailRegex.test(input) ? true : "Please enter a valid email.";
+					return emailRegex.test(input)
+						? true
+						: "Please enter a valid email.";
 				},
 			},
 		]);
 
-		config.email = email;
-		saveConfig(config);
+		withConfig((c) => {
+			c.email = email;
+		});
+		currentConfig = readConfig();
 	}
 
-	// Obtain SSL certificate using Certbot
 	try {
 		execSync("which certbot", { stdio: "ignore" });
-		execSync("which python3-certbot-nginx", { stdio: "ignore" });
-	} catch (error) {
+	} catch {
 		execSync("sudo apt install certbot python3-certbot-nginx -y", {
 			stdio: "inherit",
 		});
-	} finally {
-		try {
-			execSync(
-				`sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${config.email}`,
-				{ stdio: "inherit" },
-			);
-		} catch (error) {
-			console.error(
-				chalk.red(`Failed to obtain SSL certificate: ${error.message}`),
-			);
-			process.exit(1);
-		}
 	}
 
-	log(chalk.green(`SSL certificate obtained and configured for ${domain}.`));
+	try {
+		execSync(
+			`sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${currentConfig.email}`,
+			{ stdio: "inherit" },
+		);
+	} catch (error) {
+		console.error(
+			chalk.red(`Failed to obtain SSL certificate: ${error.message}`),
+		);
+		process.exit(1);
+	}
+
+	log(
+		chalk.green(
+			`SSL certificate obtained and configured for ${domain}.`,
+		),
+	);
 }
 
+// ---------------------------------------------------------------------------
+// Port helpers
+// ---------------------------------------------------------------------------
+
+function isPortInUse(port) {
+	return new Promise((resolve) => {
+		const server = net.createServer();
+		server.once("error", (err) => {
+			resolve(err.code === "EADDRINUSE");
+		});
+		server.once("listening", () => {
+			server.close();
+			resolve(false);
+		});
+		server.listen(port);
+	});
+}
+
+async function getAvailablePort(port) {
+	let current = port;
+	while (await isPortInUse(current)) {
+		const answer = await inquirer.prompt([
+			{
+				type: "input",
+				name: "port",
+				message: `Port ${current} is already in use. Please enter another port:`,
+				validate: (input) => {
+					const n = Number.parseInt(input, 10);
+					return Number.isInteger(n) && n > 0 && n <= 65535
+						? true
+						: "Please enter a valid port number (1-65535).";
+				},
+			},
+		]);
+		current = Number.parseInt(answer.port, 10);
+	}
+	return current;
+}
+
+function getRandomAvailablePort() {
+	return new Promise((resolve) => {
+		const server = net.createServer();
+		server.listen(0, () => {
+			const { port } = server.address();
+			server.close(() => resolve(port));
+		});
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Webhook helpers
+// ---------------------------------------------------------------------------
+
 async function setupWebhookServer() {
+	const config = readConfig();
+
 	const { webhookUrl } = await inquirer.prompt([
 		{
 			type: "input",
@@ -426,103 +504,59 @@ async function setupWebhookServer() {
 			message:
 				"Enter the URL where the webhook will be received (e.g., quicky.example.com):",
 			validate: (input) => {
-				if (input.trim() === "") {
-					return "URL is required.";
-				}
-				if (config.domains?.some((d) => d.domain === input.trim())) {
+				if (input.trim() === "") return "URL is required.";
+				if (
+					(config.domains || []).some(
+						(d) => d.domain === input.trim(),
+					)
+				)
 					return "This domain is already in use. Please enter a different URL.";
-				}
 				return true;
 			},
 		},
 	]);
 
-	const isPortInUse = (port) => {
-		return new Promise((resolve) => {
-			const server = net.createServer();
+	const availablePort = await getRandomAvailablePort();
 
-			server.once("error", (err) => {
-				if (err.code === "EADDRINUSE") {
-					resolve(true);
-				} else {
-					resolve(false);
-				}
-			});
+	const webhookPath = path.join(DEFAULT_FOLDER, "webhook");
 
-			server.once("listening", () => {
-				server.close();
-				resolve(false);
-			});
-
-			server.listen(port);
-		});
-	};
-
-	const getRandomPort = () => {
-		return Math.floor(Math.random() * (65535 - 1024 + 1)) + 1024;
-	};
-
-	const getAvailablePort = async () => {
-		let port;
-		do {
-			port = getRandomPort();
-		} while (await isPortInUse(port));
-		return port;
-	};
-
-	const availablePort = await getAvailablePort();
-
-	// Set up the webhook server
-	const git = simpleGit();
-	const webhookPath = `${defaultFolder}/webhook`; // .quicky/webhook
-
-	// Check if the webhook directory already exists and is not empty
-	if (fs.existsSync(webhookPath) && fs.readdirSync(webhookPath).length > 0) {
+	if (
+		fs.existsSync(webhookPath) &&
+		fs.readdirSync(webhookPath).length > 0
+	) {
 		log(
 			chalk.yellow(
 				`Directory ${webhookPath} already exists and is not empty. Deleting...`,
 			),
 		);
 
-		// Stop and delete the PM2 instance if it exists
 		try {
-			execSync(
-				"pm2 stop quicky-webhook-server && pm2 del quicky-webhook-server",
-				{
-					stdio: "inherit",
-				},
-			);
-		} catch (error) {
-			log(chalk.red(`Failed to stop/delete PM2 instance: ${error.message}`));
+			execFileSync("pm2", ["stop", "quicky-webhook-server"], { stdio: "pipe" });
+			execFileSync("pm2", ["delete", "quicky-webhook-server"], { stdio: "pipe" });
+		} catch {
+			/* may not exist */
 		}
 
 		fs.removeSync(webhookPath);
 	}
 
-	// Clone the webhook repository
-	await git.clone("https://github.com/alohe/quicky-webhook.git", webhookPath);
+	execFileSync("git", ["clone", "https://github.com/alohe/quicky-webhook.git", webhookPath], {
+		stdio: "inherit",
+	});
 
-	// Install dependencies
 	execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
 
-	// Set up the domain using the setupDomain function
 	await setupDomain(webhookUrl, availablePort);
 
-	// Generate a random secret for securing the webhook
 	const webhookSecret = uuidv4();
 
-	// Add a .env file to the webhook server
-	const envFilePath = `${webhookPath}/.env`;
+	const envFilePath = path.join(webhookPath, ".env");
+	const envContent = `WEBHOOK_URL=${webhookUrl}\nWEBHOOK_PORT=${availablePort}\nWEBHOOK_SECRET=${webhookSecret}`;
+	fs.writeFileSync(envFilePath, envContent);
 
-	fs.writeFileSync(
-		envFilePath,
-		`WEBHOOK_URL=${webhookUrl}\nWEBHOOK_PORT=${availablePort}\nWEBHOOK_SECRET=${webhookSecret}`,
-		{ flag: "wx" },
-	);
-
-	// Update the webhook URL and secret for all the projects managed by Quicky
-	if (config.projects && config.projects.length > 0) {
-		for (const project of config.projects) {
+	const currentConfig = readConfig();
+	if (currentConfig.projects && currentConfig.projects.length > 0) {
+		for (const project of currentConfig.projects) {
 			if (project.webhookId) {
 				const webhookConfig = {
 					config: {
@@ -538,11 +572,13 @@ async function setupWebhookServer() {
 						webhookConfig,
 						{
 							headers: {
-								Authorization: `Bearer ${config.github.access_token}`,
+								Authorization: `Bearer ${currentConfig.github.access_token}`,
 							},
 						},
 					);
-					console.log(`Webhook updated for project: ${project.repo}`);
+					console.log(
+						`Webhook updated for project: ${project.repo}`,
+					);
 				} catch (error) {
 					console.error(
 						`Error updating webhook for project ${project.repo}: ${error.message}`,
@@ -553,21 +589,15 @@ async function setupWebhookServer() {
 	}
 
 	try {
-		// Start the webhook server with PM2
-		execSync(
-			`pm2 start ${path.join(
-				webhookPath,
-				"index.js",
-			)} --name "quicky-webhook-server"`,
-			{
-				stdio: "inherit",
-			},
+		execFileSync(
+			"pm2",
+			["start", path.join(webhookPath, "index.js"), "--name", "quicky-webhook-server"],
+			{ stdio: "inherit" },
 		);
 	} catch (error) {
 		if (error.message.includes("Script already launched")) {
-			// If the script is already running, attempt to restart it
 			try {
-				execSync(`pm2 restart "quicky-webhook-server"`, {
+				execFileSync("pm2", ["restart", "quicky-webhook-server"], {
 					stdio: "inherit",
 				});
 			} catch (restartError) {
@@ -575,22 +605,27 @@ async function setupWebhookServer() {
 					"Failed to restart the webhook server:",
 					restartError.message,
 				);
-				throw restartError; // Re-throw the error after logging
+				throw restartError;
 			}
 		} else {
-			console.error("Failed to start the webhook server:", error.message);
-			throw error; // Re-throw the error after logging
+			console.error(
+				"Failed to start the webhook server:",
+				error.message,
+			);
+			throw error;
 		}
 	}
 
-	// Update the global config.json with the webhook server details
-	config.webhook = {
-		webhookUrl: `https://${webhookUrl}/webhook`,
-		webhookPort: availablePort,
-		secret: webhookSecret,
-		pm2Name: "quicky-webhook-server",
-	};
-	saveConfig(config);
+	withConfig((c) => {
+		c.webhook = {
+			webhookUrl: `https://${webhookUrl}/webhook`,
+			webhookPort: availablePort,
+			secret: webhookSecret,
+			pm2Name: "quicky-webhook-server",
+		};
+	});
+
+	pm2Save();
 
 	log(
 		chalk.green(
@@ -599,9 +634,9 @@ async function setupWebhookServer() {
 	);
 }
 
-// Function to set up a webhook on a repository to be used during deployment
 async function setupWebhook(repo) {
-	// check if the webhook config is already set up in the config file
+	const config = readConfig();
+
 	if (
 		!config.webhook ||
 		!config.webhook.webhookUrl ||
@@ -627,42 +662,42 @@ async function setupWebhook(repo) {
 			await setupWebhookServer();
 		} else {
 			log(chalk.yellow("Operation cancelled."));
-			return;
+			return null;
 		}
 	}
 
+	const latestConfig = readConfig();
 	const webhookConfig = {
 		name: "web",
 		active: true,
-		events: ["push"], // Listen for push events
+		events: ["push"],
 		config: {
-			url: config.webhook.webhookUrl, // User's local service URL
+			url: latestConfig.webhook.webhookUrl,
 			content_type: "json",
-			secret: config.webhook.secret, // Add the secret for securing the webhook
+			secret: latestConfig.webhook.secret,
 		},
 	};
 
-	// Create the webhook on the user's repository
 	try {
 		const response = await axios.post(
 			`https://api.github.com/repos/${repo}/hooks`,
 			webhookConfig,
 			{
 				headers: {
-					Authorization: `Bearer ${config.github.access_token}`,
+					Authorization: `Bearer ${latestConfig.github.access_token}`,
 				},
 			},
 		);
 		console.log(`Webhook created: ${response.data.id}`);
-		return response.data.id; // Return the webhook ID
+		return response.data.id;
 	} catch (error) {
 		console.error(`Error creating webhook: ${error.message}`);
-		return null; // Return null if there was an error
+		return null;
 	}
 }
 
-// Function to remove a webhook from a repo to be used during project deletion
 async function removeWebhook(repo, webhookId) {
+	const config = readConfig();
 	try {
 		await axios.delete(
 			`https://api.github.com/repos/${repo}/hooks/${webhookId}`,
@@ -680,329 +715,405 @@ async function removeWebhook(repo, webhookId) {
 	}
 }
 
-// Function to update a project with the latest changes from the repository
-async function updateProject(project, promptEnv = false) {
+// ---------------------------------------------------------------------------
+// Deploy & Update (atomic releases + health check)
+// ---------------------------------------------------------------------------
+
+async function deployOrUpdate(project, { promptEnv = false, isInitialDeploy = false } = {}) {
+	const config = readConfig();
+
+	validateName(project.owner, "owner");
+	validateName(project.repo, "repo");
+
+	if (project.type === "next.js" && !project.port) {
+		throw new Error("A port is required for a Next.js project");
+	}
+
+	const spinner = createSpinner(
+		isInitialDeploy
+			? `Deploying ${project.repo}...`
+			: `Updating ${project.repo}...`,
+	).start();
+	await sleep(500);
+
+	ensureReleaseLayout(project.repo);
+
+	const previousRelease = getCurrentRelease(project.repo);
+
+	spinner.update({ text: "Fetching repository..." });
+
+	let releaseDir;
 	try {
-		// Validate project configuration upfront
-		if (!project.owner || !project.repo) {
-			throw new Error("Invalid project configuration: Missing owner or repo");
-		}
+		const mirror = ensureMirror(
+			project.owner,
+			project.repo,
+			config.github.access_token,
+		);
+		const sha = getMirrorHeadSha(mirror);
+		const release = createReleaseDir(project.repo, sha);
+		releaseDir = release.dir;
 
-		// Validate project type and required configurations
-		if (project.type === "next.js" && !project.port) {
-			throw new Error("A port is required for a Next.js project");
-		}
+		checkoutFromMirror(mirror, releaseDir, "HEAD");
+	} catch (fetchError) {
+		spinner.error({ text: `Fetch failed: ${fetchError.message}` });
+		throw fetchError;
+	}
 
-		const git = simpleGit();
-		const repoPath = `${projectsDir}/${project.repo}`;
-		const tempPath = `${tempDir}/${project.repo}`;
+	spinner.stop();
 
-		const spinner = createSpinner(`Updating ${project.repo}...`).start();
-		await sleep(1000);
+	const persist = project.persist || [
+		".env",
+		".env.local",
+		".env.production",
+		".env.production.local",
+	];
 
-		try {
-			// Clone into temporary directory
-			spinner.update({ text: "Cloning the repository..." });
+	if (promptEnv) {
+		const sharedDir = getSharedDir(project.repo);
+		const sharedEnv = path.join(sharedDir, ".env");
 
-			// Clean up any existing temp directory first
-			if (fs.existsSync(tempPath)) {
-				spinner.update({ text: "Cleaning up existing temp directory..." });
-				try {
-					await fs.remove(tempPath);
-				} catch (err) {
-					console.error(`Error removing temp dir: ${err.message}`);
-				}
+		if (fs.existsSync(sharedEnv)) {
+			const { updateEnv } = await inquirer.prompt([
+				{
+					type: "confirm",
+					name: "updateEnv",
+					message: "Would you like to update the .env file?",
+					default: false,
+				},
+			]);
+
+			if (updateEnv) {
+				execSync(`nano ${sharedEnv}`, { stdio: "inherit" });
 			}
+		} else {
+			const { createEnv } = await inquirer.prompt([
+				{
+					type: "confirm",
+					name: "createEnv",
+					message: "Would you like to create a .env file?",
+					default: false,
+				},
+			]);
 
-			// Ensure the tempPath directory exists and is empty
-			await fs.ensureDir(tempPath);
-
-			await git.clone(
-				`https://${config.github.access_token}@github.com/${project.owner}/${project.repo}.git`,
-				tempPath,
-			);
-
-			// Stop the spinner before prompting
-			spinner.stop();
-
-			if (promptEnv) {
-				if (fs.existsSync(`${repoPath}/.env`)) {
-					const { updateEnv } = await inquirer.prompt([
-						{
-							type: "confirm",
-							name: "updateEnv",
-							message: "Would you like to update the .env file?",
-							default: false,
-						},
-					]);
-
-					if (updateEnv) {
-						// Copy existing .env to temp location and open in nano
-						fs.copyFileSync(`${repoPath}/.env`, `${tempPath}/.env`);
-						execSync(`nano ${tempPath}/.env`, { stdio: "inherit" });
-					} else {
-						// Preserve existing .env file by copying to temp directory
-						fs.copyFileSync(`${repoPath}/.env`, `${tempPath}/.env`);
-					}
-				} else {
-					// Prompt user if they want to create a .env file
-					const { createEnv } = await inquirer.prompt([
-						{
-							type: "confirm",
-							name: "createEnv",
-							message: "Would you like to create a .env file?",
-							default: false
-						},
-					]);
-
-					if (createEnv) {
-						execSync(`nano ${tempPath}/.env`, { stdio: "inherit" });
-					}
-				}
-			} else if (fs.existsSync(`${repoPath}/.env`)) {
-				fs.copyFileSync(`${repoPath}/.env`, `${tempPath}/.env`);
-			}
-
-			// Restart the spinner after prompts
-			spinner.start();
-
-			// Install dependencies and build the project in the temporary directory
-			const packageManager = config.packageManager || "npm";
-			const installCommand = `${packageManager} install`;
-			const buildCommand = `${packageManager} run build`;
-
-			try {
-				spinner.update({ text: "Installing dependencies..." });
-				execSync(`cd ${tempPath} && ${installCommand}`, {
-					stdio: "inherit",
-				});
-			} catch (error) {
-				spinner.error({ text: `Install failed: ${error.message}` });
-				throw new Error(`Failed to install dependencies: ${error.message}`);
-			}
-
-			// Check for build script and validate build process
-			let buildSuccessful = false;
-			try {
-				const packageJson = JSON.parse(
-					fs.readFileSync(`${tempPath}/package.json`, "utf8"),
+			if (createEnv) {
+				fs.ensureDirSync(sharedDir);
+				fs.writeFileSync(
+					sharedEnv,
+					"# Add your environment variables below\n",
 				);
-				const hasBuildScript = packageJson.scripts?.build;
-
-				if (hasBuildScript) {
-					spinner.update({ text: "Building the project in temp directory..." });
-
-					try {
-						// Execute build command for both Next.js and Node.js projects
-						execSync(`cd ${tempPath} && ${buildCommand}`, {
-							stdio: "inherit",
-						});
-
-						// Validate build success based on project type
-						if (project.type === "next.js") {
-							buildSuccessful = fs.existsSync(`${tempPath}/.next`);
-							if (!buildSuccessful) {
-								throw new Error(
-									"Next.js build did not generate .next directory",
-								);
-							}
-						} else if (project.type === "node.js") {
-							buildSuccessful = true;
-						} else {
-							throw new Error("Invalid project type");
-						}
-					} catch (buildError) {
-						buildSuccessful = false;
-						throw buildError;
-					}
-				} else {
-					// If no build script, consider it successful
-					buildSuccessful = true;
-				}
-			} catch (error) {
-				spinner.error({ text: `Build failed: ${error.message}` });
-				throw new Error(`Failed to build project: ${error.message}`);
+				execSync(`nano ${sharedEnv}`, { stdio: "inherit" });
 			}
+		}
+	}
 
-			// Stop the PM2 process if it exists
-			spinner.update({ text: "Stopping PM2 process..." });
-			try {
-				execSync(`pm2 stop ${project.repo}`, { stdio: "ignore" });
-			} catch (error) {
-				// Ignore error if process doesn't exist
-			}
+	linkSharedPaths(project.repo, releaseDir, persist);
 
-			const backupPath = `${repoPath}_backup`;
+	spinner.start();
+	spinner.update({ text: "Installing dependencies..." });
 
-			try {
-				// Create backup by renaming if project directory exists
-				if (fs.existsSync(repoPath)) {
-					if (fs.existsSync(backupPath)) {
-						fs.removeSync(backupPath); // Remove existing backup if any
-					}
-					// Use fs-extra's moveSync instead of renameSync for better cross-platform support
-					fs.moveSync(repoPath, backupPath, { overwrite: true });
-					spinner.success({ text: "Backup created." });
-				}
-			} catch (err) {
-				spinner.error({ text: `Error during backup: ${err.message}` });
-				throw err; // Propagate error since this is a critical operation
-			} finally {
-				spinner.stop();
-			}
+	const packageManager = config.packageManager || "npm";
+	const installCmd =
+		packageManager === "bun" ? "bun install" : "npm install";
+	const buildCmd =
+		packageManager === "bun" ? "bun run build" : "npm run build";
 
-			// Move temp directory to project directory using moveSync
-			fs.moveSync(tempPath, repoPath, { overwrite: true });
+	try {
+		execSync(`cd "${releaseDir}" && ${installCmd}`, {
+			stdio: "inherit",
+		});
+	} catch (error) {
+		spinner.error({ text: `Install failed: ${error.message}` });
+		fs.removeSync(releaseDir);
+		throw new Error(`Failed to install dependencies: ${error.message}`);
+	}
 
-			// Check if the main entry file exists before starting
-			const packageJsonPath = `${repoPath}/package.json`;
-			let mainFile = 'index.js';
-
-			if (fs.existsSync(packageJsonPath)) {
-				const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-				mainFile = packageJson.main || 'index.js';
-			}
-
-			log("Starting the project...");
-
-			// Determine start command based on project type
-			let startCommand;
-			if (project.type === "next.js") {
-				startCommand = `pm2 start npm --name "${project.repo}" -- start -- --port ${project.port}`;
-			} else {
-				const entryFile = `${repoPath}/${mainFile}`;
-				if (!fs.existsSync(entryFile)) {
-					throw new Error(`Entry file ${entryFile} not found. Please check that the "main" field in your package.json points to the correct entry file, or ensure index.js exists in the root directory.`);
-				}
-				startCommand = project.port
-					? `pm2 start ${mainFile} --name "${project.repo}" -- --port ${project.port}`
-					: `pm2 start ${mainFile} --name "${project.repo}"`;
-			}
-
-			// Start the project
-			try {
-				log("Stopping existing PM2 process if any...");
-				try {
-					execSync(`pm2 delete "${project.repo}"`, { stdio: "ignore" });
-				} catch (deleteError) {
-					// Ignore error if process doesn't exist
-				}
-
-				log("Starting the project...");
-				execSync(`cd ${repoPath} && ${startCommand}`, {
-					stdio: "inherit",
-				});
-			} catch (startError) {
-				// Rollback if start fails
-				log(chalk.red(`Failed to start project: ${startError.message}`));
-				try {
-					// Remove failed directory if it exists
-					if (fs.existsSync(`${repoPath}_failed`)) {
-						fs.removeSync(`${repoPath}_failed`);
-					}
-					// Move current repo to failed state
-					fs.moveSync(repoPath, `${repoPath}_failed`, { overwrite: true });
-					// Restore backup
-					fs.moveSync(backupPath, repoPath, { overwrite: true });
-					log(
-						chalk.yellow(
-							`Project ${project.repo} has been rolled back due to startup failure.`,
-						),
-					);
-				} catch (rollbackError) {
-					log(chalk.red(`Failed to rollback: ${rollbackError.message}`));
-				}
-				throw new Error(`Failed to start project: ${startError.message}`);
-			}
-
-			// Update the last_updated timestamp
-			project.last_updated = new Date().toISOString();
-			saveConfig(config);
-
-			log(`✔ Project ${chalk.green.bold(project.repo)} updated successfully.`);
-		} catch (error) {
-			spinner.error({
-				text: `Failed to update project: ${error.message}`,
+	try {
+		const releasePkg = JSON.parse(
+			fs.readFileSync(path.join(releaseDir, "package.json"), "utf8"),
+		);
+		if (releasePkg.scripts?.build) {
+			spinner.update({ text: "Building the project..." });
+			execSync(`cd "${releaseDir}" && ${buildCmd}`, {
+				stdio: "inherit",
 			});
-			throw error;
+
+			if (
+				project.type === "next.js" &&
+				!fs.existsSync(path.join(releaseDir, ".next"))
+			) {
+				throw new Error(
+					"Next.js build did not generate .next directory",
+				);
+			}
 		}
 	} catch (error) {
-		console.error(chalk.red(`Error: ${error.message}`));
-		process.exit(1);
+		spinner.error({ text: `Build failed: ${error.message}` });
+		fs.removeSync(releaseDir);
+		throw new Error(`Failed to build project: ${error.message}`);
+	}
+
+	spinner.update({ text: "Building PM2 ecosystem..." });
+
+	const ecosystemPath = buildEcosystemFile(project, releaseDir);
+
+	spinner.update({ text: "Switching to new release..." });
+
+	swapRelease(project.repo, releaseDir);
+
+	pm2DeleteIfExists(project.repo);
+	try {
+		pm2StartEcosystem(ecosystemPath);
+	} catch (startError) {
+		log(
+			chalk.red(
+				`Failed to start project: ${startError.message}`,
+			),
+		);
+		if (previousRelease) {
+			log(chalk.yellow("Rolling back to previous release..."));
+			rollbackRelease(project.repo, previousRelease);
+			const prevEcosystem = path.join(
+				previousRelease,
+				"ecosystem.config.cjs",
+			);
+			if (fs.existsSync(prevEcosystem)) {
+				try {
+					pm2StartEcosystem(prevEcosystem);
+				} catch {
+					/* best effort */
+				}
+			}
+			log(
+				chalk.yellow(
+					`Project ${project.repo} has been rolled back due to startup failure.`,
+				),
+			);
+		}
+		spinner.error({ text: `Startup failed: ${startError.message}` });
+		throw new Error(
+			`Failed to start project: ${startError.message}`,
+		);
+	}
+
+	spinner.update({ text: "Running health checks..." });
+
+	const health = await waitForHealthy(project);
+
+	if (!health.healthy) {
+		log(
+			chalk.red(
+				`Health check failed: ${health.reason}`,
+			),
+		);
+		if (previousRelease) {
+			log(chalk.yellow("Rolling back to previous release..."));
+			rollbackRelease(project.repo, previousRelease);
+			pm2DeleteIfExists(project.repo);
+			const prevEcosystem = path.join(
+				previousRelease,
+				"ecosystem.config.cjs",
+			);
+			if (fs.existsSync(prevEcosystem)) {
+				try {
+					pm2StartEcosystem(prevEcosystem);
+				} catch {
+					/* best effort */
+				}
+			}
+			log(
+				chalk.yellow(
+					`Project ${project.repo} has been rolled back.`,
+				),
+			);
+		}
+		spinner.error({ text: `Health check failed: ${health.reason}` });
+		throw new Error(`Health check failed: ${health.reason}`);
+	}
+
+	pruneReleases(project.repo);
+	pm2Save();
+
+	withConfig((c) => {
+		const proj = c.projects.find((p) => p.repo === project.repo);
+		if (proj) {
+			proj.last_updated = new Date().toISOString();
+		}
+	});
+
+	spinner.success({
+		text: `Project ${chalk.green.bold(project.repo)} ${isInitialDeploy ? "deployed" : "updated"} successfully.`,
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Status display
+// ---------------------------------------------------------------------------
+
+function status() {
+	const config = readConfig();
+
+	const table = new Table({
+		head: [
+			chalk.cyan.bold("PID"),
+			chalk.cyan.bold("Owner"),
+			chalk.cyan.bold("Repository"),
+			chalk.cyan.bold("Port"),
+			chalk.cyan.bold("Status"),
+			chalk.cyan.bold("Memory"),
+			chalk.cyan.bold("Disk Space"),
+			chalk.cyan.bold("Last Updated"),
+			chalk.cyan.bold("Errors"),
+		],
+		style: { head: ["cyan", "bold"] },
+		wordWrap: true,
+		colWidths: [8, 12, 15, 8, 12, 12, 12, 15, 25],
+	});
+
+	const errorProjects = [];
+
+	for (const project of config.projects) {
+		let pm2Status = "Not Running";
+		let memory = "N/A";
+		let diskSpace = "N/A";
+		let errorMsg = "";
+
+		const info = getPm2Status(project.repo);
+		if (info) {
+			pm2Status = info.status || "unknown";
+			if (info.memory) {
+				memory = `${Math.round(info.memory / (1024 * 1024))}MB`;
+			}
+
+			const projectPath = getProjectRoot(project.repo);
+			if (fs.existsSync(projectPath)) {
+				try {
+					const size = execSync(
+						`du -sh "${projectPath}" | cut -f1`,
+						{ encoding: "utf-8" },
+					).trim();
+					diskSpace = size;
+				} catch {
+					/* ignore */
+				}
+			}
+
+			if (info.status !== "online" && info.errLogPath && fs.existsSync(info.errLogPath)) {
+				try {
+					const errors = fs.readFileSync(info.errLogPath, "utf-8").split("\n").filter(Boolean).pop() || "";
+					if (errors) {
+						errorMsg =
+							errors.substring(0, 25) +
+							(errors.length > 25 ? "..." : "");
+						errorProjects.push({
+							repo: project.repo,
+							error: errors,
+						});
+					}
+				} catch {
+					/* ignore */
+				}
+			}
+		}
+
+		table.push([
+			chalk.yellow.bold(project.pid),
+			chalk.white(project.owner),
+			chalk.white(project.repo),
+			project.port
+				? chalk.greenBright.bold(project.port)
+				: chalk.gray("N/A"),
+			pm2Status === "online"
+				? chalk.green(pm2Status)
+				: chalk.red(pm2Status),
+			chalk.white(memory),
+			chalk.white(diskSpace),
+			chalk.white(
+				formatDistanceToNow(new Date(project.last_updated), {
+					addSuffix: true,
+				}),
+			),
+			errorMsg ? chalk.red(errorMsg) : chalk.gray("-"),
+		]);
+	}
+
+	log(table.toString());
+
+	if (errorProjects.length > 0) {
+		inquirer
+			.prompt([
+				{
+					type: "confirm",
+					name: "viewErrors",
+					message: `${errorProjects.length} project(s) have errors. View full logs?`,
+					default: false,
+				},
+			])
+			.then((answer) => {
+				if (answer.viewErrors) {
+					for (const { repo, error } of errorProjects) {
+						console.log(
+							chalk.red(`\n--- ${repo} ---`),
+						);
+						console.log(error);
+					}
+				}
+			});
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Help
+// ---------------------------------------------------------------------------
+
 function help() {
 	const rabbit = `
- (\\(\\ 
+ (\\(\\${" "}
  ( -.-)
  o_(")(")
 `;
 
-	log(chalk.blue(rabbit)); // Change color to whatever fits your style
+	log(chalk.blue(rabbit));
 	log(
-		`${chalk.hex("#fd6d4c").bold("Quicky")}${chalk.hex("#f39549")(
-			" - A CLI tool to deploy Next.js and Node.js projects",
-		)}`,
+		`${chalk.hex("#fd6d4c").bold("Quicky")}${chalk.hex("#f39549")(" - A CLI tool to deploy Next.js and Node.js projects")}`,
 	);
 	log("");
 	log("Usage:");
-	// use the chalk package to colorize the output
 	log(
-		`${chalk.blue("  quicky")} ${chalk.hex("#FFA500")(
-			"<command>",
-		)} ${chalk.green("[options]")}`,
+		`${chalk.blue("  quicky")} ${chalk.hex("#FFA500")("<command>")} ${chalk.green("[options]")}`,
 	);
 	log("");
 	log("Commands:");
 	log(
-		`  ${chalk
-			.hex("#cea9fe")
-			.bold(
-				"init",
-			)}      Save your GitHub account details and install dependencies\n`,
+		`  ${chalk.hex("#cea9fe").bold("init")}      Save your GitHub account details and install dependencies\n`,
 	);
 	log(
-		`  ${chalk.blue.bold(
-			"deploy",
-		)}    Deploy a Next.js or Node.js project from GitHub`,
+		`  ${chalk.blue.bold("deploy")}    Deploy a Next.js or Node.js project from GitHub`,
 	);
 	log(
-		`  ${chalk.blue.bold(
-			"list",
-		)}      List the current configuration and associated PM2 instances`,
+		`  ${chalk.blue.bold("list")}      List the current configuration and associated PM2 instances`,
 	);
 	log(
-		`  ${chalk.blue.bold(
-			"manage",
-		)}    Start, stop, restart, update, or delete a project \n`,
+		`  ${chalk.blue.bold("manage")}    Start, stop, restart, update, or delete a project \n`,
 	);
 	log(
-		`  ${chalk.blue.bold(
-			"update",
-		)}    Update a project by its PID, primarily used by the webhook server\n`,
+		`  ${chalk.blue.bold("update")}    Update a project by its PID, primarily used by the webhook server\n`,
 	);
 	log(
-		`  ${chalk.cyanBright.bold(
-			"domains",
-		)}   Manage domains and subdomains for the projects`,
+		`  ${chalk.cyanBright.bold("domains")}   Manage domains and subdomains for the projects`,
 	);
 	log(
-		`  ${chalk.cyanBright.bold(
-			"webhooks",
-		)}  Manage the webhook server for your projects`,
+		`  ${chalk.cyanBright.bold("webhooks")}  Manage the webhook server for your projects`,
+	);
+	log(
+		`  ${chalk.cyanBright.bold("persist")}   Manage persisted files for a project`,
 	);
 	log("");
 	log(`  ${chalk.hex("#fe64fa").bold("install")}   Install quicky globally`);
 	log(
-		`  ${chalk
-			.hex("#fe64fa")
-			.bold("upgrade")}   Upgrade quicky to the latest version`,
+		`  ${chalk.hex("#fe64fa").bold("upgrade")}   Upgrade quicky to the latest version`,
 	);
 	log(
-		`  ${chalk
-			.hex("#fe64fa")
-			.bold("uninstall")} Uninstall the CLI tool globally`,
+		`  ${chalk.hex("#fe64fa").bold("uninstall")} Uninstall the CLI tool globally`,
 	);
 	log("");
 	log("Options:");
@@ -1011,6 +1122,10 @@ function help() {
 	log("");
 	log("For more information, visit https://quicky.dev");
 }
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
 
 program
 	.version(
@@ -1034,7 +1149,9 @@ program
 			execSync("sudo npm install -g quicky", { stdio: "inherit" });
 			log(chalk.green("Quicky has been installed globally."));
 		} catch (error) {
-			console.error(chalk.red(`Failed to install Quicky: ${error.message}`));
+			console.error(
+				chalk.red(`Failed to install Quicky: ${error.message}`),
+			);
 		}
 	});
 
@@ -1059,20 +1176,15 @@ program
 			]);
 
 			if (confirmUninstall) {
-				// Stop and delete all PM2 instances managed by Quicky
+				const config = readConfig();
+
 				try {
-					const projectNames = config.projects.map((project) => project.repo);
-					for (const name of projectNames) {
-						execSync(`pm2 del ${name}`, {
-							stdio: "inherit",
-						});
+					for (const project of config.projects) {
+						pm2DeleteIfExists(project.repo);
 					}
 
-					// Stop and delete the webhook server if it exists
 					if (config.webhook?.pm2Name) {
-						execSync(`pm2 del ${config.webhook.pm2Name}`, {
-							stdio: "inherit",
-						});
+						pm2DeleteIfExists(config.webhook.pm2Name);
 					}
 
 					log(
@@ -1081,20 +1193,27 @@ program
 						),
 					);
 				} catch (error) {
-					log(chalk.red(`Failed to stop PM2 instances: ${error.message}`));
+					log(
+						chalk.red(
+							`Failed to stop PM2 instances: ${error.message}`,
+						),
+					);
 				}
 
-				// Delete Nginx configurations managed by Quicky
 				try {
 					const domains = config.domains || [];
 					for (const domain of domains) {
 						const domainConfigPath = `/etc/nginx/sites-available/${domain.domain}`;
 						const domainSymlinkPath = `/etc/nginx/sites-enabled/${domain.domain}`;
 						if (fs.existsSync(domainConfigPath)) {
-							execSync(`sudo rm ${domainConfigPath}`, { stdio: "inherit" });
+							execFileSync("sudo", ["rm", domainConfigPath], {
+								stdio: "inherit",
+							});
 						}
 						if (fs.existsSync(domainSymlinkPath)) {
-							execSync(`sudo rm ${domainSymlinkPath}`, { stdio: "inherit" });
+							execFileSync("sudo", ["rm", domainSymlinkPath], {
+								stdio: "inherit",
+							});
 						}
 					}
 					log(
@@ -1110,21 +1229,36 @@ program
 					);
 				}
 
-				// Delete the default folder where projects and configurations are stored
 				try {
-					fs.removeSync(defaultFolder);
-					log(chalk.green("Quicky has been uninstalled successfully."));
+					fs.removeSync(DEFAULT_FOLDER);
+					log(
+						chalk.green(
+							"Quicky has been uninstalled successfully.",
+						),
+					);
 				} catch (error) {
-					log(chalk.red(`Failed to delete Quicky folder: ${error.message}`));
+					log(
+						chalk.red(
+							`Failed to delete Quicky folder: ${error.message}`,
+						),
+					);
 				}
 
-				// Uninstall the CLI tool
 				try {
-					execSync("sudo npm uninstall -g quicky", { stdio: "inherit" });
-					execSync("hash -r", { stdio: "inherit" });
-					log(chalk.green("✔ Quicky has been uninstalled successfully."));
+					execSync("sudo npm uninstall -g quicky", {
+						stdio: "inherit",
+					});
+					log(
+						chalk.green(
+							"✔ Quicky has been uninstalled successfully.",
+						),
+					);
 				} catch (error) {
-					log(chalk.red(`Failed to uninstall Quicky: ${error.message}`));
+					log(
+						chalk.red(
+							`Failed to uninstall Quicky: ${error.message}`,
+						),
+					);
 				}
 			} else {
 				log(chalk.yellow("Uninstallation of projects cancelled."));
@@ -1136,7 +1270,9 @@ program
 
 program
 	.command("init")
-	.description("Save your GitHub account details and install dependencies")
+	.description(
+		"Save your GitHub account details and install dependencies",
+	)
 	.option("--username <username>", "GitHub username")
 	.option("--token <token>", "GitHub personal access token")
 	.option(
@@ -1144,46 +1280,64 @@ program
 		"Package manager to use (npm|bun)",
 	)
 	.action(async (cmd) => {
+		let spinner = null;
 		try {
-			let { username, token, packageManager } = cmd || config.github || {};
+			let { username, token, packageManager } = cmd || {};
+			const config = readConfig();
+			let wantsUpdate = false;
 
-			// Check if details are already configured
-			if (config.github?.username && config.github?.access_token && config.packageManager) {
+			if (
+				config.github?.username &&
+				config.github?.access_token &&
+				config.packageManager
+			) {
 				const { updateConfig } = await inquirer.prompt([
 					{
-						type: 'list',
-						name: 'updateConfig',
-						message: 'GitHub details are already configured. What would you like to do?',
-						choices: ['Keep existing configuration', 'Update configuration']
-					}
+						type: "list",
+						name: "updateConfig",
+						message:
+							"GitHub details are already configured. What would you like to do?",
+						choices: [
+							"Keep existing configuration",
+							"Update configuration",
+						],
+					},
 				]);
 
-				if (updateConfig === 'Keep existing configuration') {
-					username = config.github.username;
-					token = config.github.access_token;
-					packageManager = config.packageManager;
+				if (updateConfig === "Keep existing configuration") {
 					return;
 				}
+				wantsUpdate = true;
 			}
 
-			if (!username || !token || !packageManager || updateConfig === 'Update configuration') {
+			if (
+				!username ||
+				!token ||
+				!packageManager ||
+				wantsUpdate
+			) {
 				const answers = await inquirer.prompt([
 					{
 						name: "username",
 						message: "Enter your GitHub username:",
-						default: username || config.github?.username,
+						default:
+							username || config.github?.username,
 					},
 					{
 						name: "token",
-						message: "Enter your GitHub personal access token:",
-						default: token || config.github?.access_token,
+						message:
+							"Enter your GitHub personal access token:",
+						default:
+							token || config.github?.access_token,
 					},
 					{
 						type: "list",
 						name: "packageManager",
 						message: "Choose your package manager:",
 						choices: ["npm", "bun"],
-						default: packageManager || config.packageManager,
+						default:
+							packageManager ||
+							config.packageManager,
 					},
 				]);
 
@@ -1192,272 +1346,369 @@ program
 				packageManager = answers.packageManager;
 			}
 
-			if (username && token) {
-				config.github = { username, access_token: token };
-				config.packageManager = packageManager;
-				saveConfig(config);
+			if (!username || !token) {
+				console.error(
+					chalk.red(
+						`Failed to save GitHub account details. Please ensure you have a valid personal access token. ${chalk.green("https://github.com/settings/tokens")}`,
+					),
+				);
+				return;
+			}
 
-				// Check if git is installed
+			withConfig((c) => {
+				c.github = {
+					username,
+					access_token: token,
+				};
+				c.packageManager = packageManager;
+			});
+
+			try {
+				execSync("git --version", { stdio: "ignore" });
+			} catch {
+				log(chalk.yellow("Git is not installed. Installing..."));
+				execSync("sudo apt install git -y", {
+					stdio: "inherit",
+				});
+			}
+
+			try {
+				execSync("curl --version", { stdio: "ignore" });
+			} catch {
+				log(
+					chalk.yellow(
+						"curl is not installed. Installing...",
+					),
+				);
+				execSync("sudo apt install curl -y", {
+					stdio: "inherit",
+				});
+			}
+
+			if (packageManager === "bun") {
 				try {
-					execSync("git --version", { stdio: "ignore" });
-				} catch (error) {
-					log(chalk.yellow("Git is not installed. Installing..."));
-					execSync("sudo apt install git -y", { stdio: "inherit" });
+					execSync("bun --version", { stdio: "ignore" });
+				} catch {
+					log(
+						chalk.yellow(
+							"Bun is not installed. Installing...",
+						),
+					);
+					execSync(
+						"curl -fsSL https://bun.sh/install | bash",
+						{ stdio: "inherit" },
+					);
 				}
-
-				// Check if curl is installed (needed for some package managers)
+			} else {
 				try {
-					execSync("curl --version", { stdio: "ignore" });
-				} catch (error) {
-					log(chalk.yellow("curl is not installed. Installing..."));
-					execSync("sudo apt install curl -y", { stdio: "inherit" });
+					execSync("npm --version", { stdio: "ignore" });
+				} catch {
+					log(
+						chalk.yellow(
+							"npm is not installed. Installing Node.js and npm...",
+						),
+					);
+					execSync(
+						"curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -",
+						{ stdio: "inherit" },
+					);
+					execSync("sudo apt install -y nodejs", {
+						stdio: "inherit",
+					});
 				}
+			}
 
-				// Install package manager if needed
-				if (packageManager === "bun") {
-					try {
-						execSync("bun --version", { stdio: "ignore" });
-					} catch (error) {
-						log(chalk.yellow("Bun is not installed. Installing..."));
-						execSync("curl -fsSL https://bun.sh/install | bash", { stdio: "inherit" });
-						// Source the updated PATH 
-						execSync(". ~/.bashrc", { stdio: "inherit" });
-					}
-				} else {
-					// Check for npm
-					try {
-						execSync("npm --version", { stdio: "ignore" });
-					} catch (error) {
-						log(chalk.yellow("npm is not installed. Installing Node.js and npm..."));
-						execSync("curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -", { stdio: "inherit" });
-						execSync("sudo apt install -y nodejs", { stdio: "inherit" });
-					}
-				}
+			try {
+				execSync("pm2 --version", { stdio: "ignore" });
+			} catch {
+				log(
+					chalk.yellow(
+						"PM2 is not installed. Installing...",
+					),
+				);
+				execSync("sudo npm install -g pm2", {
+					stdio: "inherit",
+				});
+			}
 
-				// Check if PM2 is installed
+			try {
+				execSync("nginx -v", { stdio: "ignore" });
+			} catch {
+				log(
+					chalk.yellow(
+						"nginx is not installed. Installing...",
+					),
+				);
+				execSync("sudo apt install nginx -y", {
+					stdio: "inherit",
+				});
+			}
+
+			try {
+				execSync("certbot --version", { stdio: "ignore" });
+			} catch {
+				log(
+					chalk.yellow(
+						"certbot is not installed. Installing...",
+					),
+				);
+				execSync(
+					"sudo apt install certbot python3-certbot-nginx -y",
+					{ stdio: "inherit" },
+				);
+			}
+
+			const startupCmd = pm2Startup();
+			if (startupCmd) {
+				log(
+					chalk.yellow(
+						`\nTo enable PM2 on startup, run:\n  ${startupCmd}`,
+					),
+				);
+			}
+
+			const freshConfig = readConfig();
+			if (freshConfig.webhook?.pm2Name) {
 				try {
-					execSync("pm2 --version", { stdio: "ignore" });
-				} catch (error) {
-					log(chalk.yellow("PM2 is not installed. Installing..."));
-					execSync("sudo npm install -g pm2", { stdio: "inherit" });
-				}
-
-				// Check if nginx is installed
-				try {
-					execSync("nginx -v", { stdio: "ignore" });
-				} catch (error) {
-					log(chalk.yellow("nginx is not installed. Installing..."));
-					execSync("sudo apt install nginx -y", { stdio: "inherit" });
-				}
-
-				// Check if certbot is installed
-				try {
-					execSync("certbot --version", { stdio: "ignore" });
-				} catch (error) {
-					log(chalk.yellow("certbot is not installed. Installing..."));
-					execSync("sudo apt install certbot python3-certbot-nginx -y", { stdio: "inherit" });
-				}
-
-				// Check if the webhook server is already running
-				if (config.webhook?.pm2Name) {
-					try {
-						const pm2Status = execSync(
-							`pm2 describe ${config.webhook.pm2Name}`,
-							{
-								stdio: "pipe",
-							},
-						).toString();
-
-						if (!pm2Status.includes("online")) {
-							log(chalk.yellow("Webhook server is not running. Restarting..."));
-							execSync(`pm2 restart ${config.webhook.pm2Name}`, {
-								stdio: "inherit",
-							});
-							log(chalk.green("Webhook server restarted successfully."));
-						} else {
-							log(chalk.green("Webhook server is already running."));
-						}
-					} catch (error) {
+					const pm2Info = getPm2Status(
+						freshConfig.webhook.pm2Name,
+					);
+					if (!pm2Info || pm2Info.status !== "online") {
 						log(
-							chalk.red(
-								`Failed to check or restart webhook server: ${error.message}`,
+							chalk.yellow(
+								"Webhook server is not running. Restarting...",
 							),
 						);
-						log(chalk.yellow("Attempting to start webhook server..."));
-						await setupWebhookServer();
+						execFileSync("pm2", ["restart", freshConfig.webhook.pm2Name], {
+							stdio: "inherit",
+						});
+						log(
+							chalk.green(
+								"Webhook server restarted successfully.",
+							),
+						);
+					} else {
+						log(
+							chalk.green(
+								"Webhook server is already running.",
+							),
+						);
 					}
-				} else {
-					log("Webhook server is not configured. Setting up...");
+				} catch {
+					log(
+						chalk.yellow(
+							"Attempting to start webhook server...",
+						),
+					);
 					await setupWebhookServer();
 				}
+			} else {
+				log(
+					"Webhook server is not configured. Setting up...",
+				);
+				await setupWebhookServer();
+			}
 
-				// Check if PM2 is already installed, if not, install it using npm
-				const spinner = createSpinner(
-					"Saving your GitHub account details and installing dependencies...",
-				).start();
-				await sleep(1000);
+			spinner = createSpinner(
+				"Saving your GitHub account details and installing dependencies...",
+			).start();
+			await sleep(1000);
+
+			try {
+				execSync("pm2 -v", { stdio: "ignore" });
+				spinner.success({
+					text: "GitHub account details saved and dependencies installed successfully!",
+				});
+			} catch {
 				try {
-					execSync("pm2 -v", { stdio: "ignore" });
+					execSync("npm install -g pm2", {
+						stdio: "inherit",
+					});
 					spinner.success({
 						text: "GitHub account details saved and dependencies installed successfully!",
 					});
-				} catch (error) {
-					try {
-						execSync("npm install -g pm2", { stdio: "inherit" });
-						spinner.success({
-							text: "GitHub account details saved and dependencies installed successfully!",
-						});
-					} catch (installError) {
-						spinner.error({
-							text: "Failed to install dependencies. Please ensure you have npm installed.",
-						});
-					}
+				} catch {
+					spinner.error({
+						text: "Failed to install dependencies. Please ensure you have npm installed.",
+					});
 				}
+			}
 
-				log(
-					`\n📁 Configuration files are stored at: ${chalk.green(configPath)}`,
-				);
-				log(`📂 Projects will be stored in: ${chalk.green(projectsDir)}`);
-				log(
-					`\n🚀 You can now deploy your Next.js projects using ${chalk.green(
-						"quicky deploy",
-					)}`,
-				);
+			pm2Save();
 
-				// Ask user if they want to deploy a project now
-				const { deployNow } = await inquirer.prompt([
-					{
-						type: "confirm",
-						name: "deployNow",
-						message: "Do you want to deploy a project now?",
-						default: false,
-					},
-				]);
+			log(
+				`\n📁 Configuration files are stored at: ${chalk.green(CONFIG_PATH)}`,
+			);
+			log(
+				`📂 Projects will be stored in: ${chalk.green(PROJECTS_DIR)}`,
+			);
+			log(
+				`\n🚀 You can now deploy your Next.js projects using ${chalk.green("quicky deploy")}`,
+			);
 
-				if (deployNow) {
-					execSync("quicky deploy", { stdio: "inherit" });
-				} else {
-					process.exit(0);
-				}
+			const { deployNow } = await inquirer.prompt([
+				{
+					type: "confirm",
+					name: "deployNow",
+					message: "Do you want to deploy a project now?",
+					default: false,
+				},
+			]);
+
+			if (deployNow) {
+				execSync("quicky deploy", { stdio: "inherit" });
 			} else {
-				spinner.error({
-					text: `Failed to save GitHub account details. Please ensure you have a valid personal access token. ${chalk.green(
-						"https://github.com/settings/tokens",
-					)}`,
-				});
+				process.exit(0);
 			}
 		} catch (error) {
 			console.error(chalk.red(`Error: ${error.message}`));
 		}
 	});
 
-// Configure webhooks
+// ---------------------------------------------------------------------------
+// Webhooks command
+// ---------------------------------------------------------------------------
+
 program
 	.command("webhooks")
 	.description("Manage the webhook server for your projects")
 	.action(async () => {
-		const webhookPath = `${defaultFolder}/webhook`;
+		const webhookPath = path.join(DEFAULT_FOLDER, "webhook");
 
-		// Check if pm2 is installed
 		try {
-			execSync('pm2 -v', { stdio: 'pipe' });
-		} catch (error) {
-			log(chalk.yellow("PM2 is not installed. Installing PM2..."));
+			execSync("pm2 -v", { stdio: "pipe" });
+		} catch {
+			log(
+				chalk.yellow(
+					"PM2 is not installed. Installing PM2...",
+				),
+			);
 			try {
-				execSync('npm install -g pm2', { stdio: 'inherit' });
+				execSync("npm install -g pm2", { stdio: "inherit" });
 				log(chalk.green("PM2 installed successfully."));
-			} catch (error) {
-				log(chalk.red("Failed to install PM2. Please install it manually using 'npm install -g pm2'"));
+			} catch {
+				log(
+					chalk.red(
+						"Failed to install PM2. Please install it manually using 'npm install -g pm2'",
+					),
+				);
 				process.exit(1);
 			}
 		}
 
+		const config = readConfig();
+
 		const isWebhookServerRunning = () => {
-			try {
-				const pm2Status = execSync(`pm2 describe ${config.webhook.pm2Name}`, {
-					stdio: "pipe",
-				}).toString();
-				return pm2Status.includes("online");
-			} catch (error) {
-				return false;
-			}
+			if (!config.webhook?.pm2Name) return false;
+			const info = getPm2Status(config.webhook.pm2Name);
+			return info?.status === "online";
 		};
 
 		const handleRestart = async () => {
 			try {
-				if (!fs.existsSync(`${webhookPath}/node_modules`)) {
-					log(chalk.yellow("node_modules not found. Running npm install..."));
-					execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
+				if (
+					!fs.existsSync(
+						path.join(webhookPath, "node_modules"),
+					)
+				) {
+					log(
+						chalk.yellow(
+							"node_modules not found. Running npm install...",
+						),
+					);
+					execSync(
+						`cd ${webhookPath} && npm install`,
+						{ stdio: "inherit" },
+					);
 				}
 
-				// First check if process exists
 				try {
-					execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" });
-					execSync(`pm2 restart ${config.webhook.pm2Name}`, { stdio: "inherit" });
-				} catch (error) {
-					// Process doesn't exist, start it instead
+					execFileSync("pm2", ["describe", config.webhook.pm2Name], { stdio: "pipe" });
+					execFileSync("pm2", ["restart", config.webhook.pm2Name], {
+						stdio: "inherit",
+					});
+				} catch {
 					await setupWebhookServer();
 				}
 
-				log(chalk.green("Webhook server restarted successfully."));
-				log(chalk.green(`Dashboard available at: http://localhost:${config.webhook.webhookPort}/dashboard`));
+				pm2Save();
+				log(
+					chalk.green(
+						"Webhook server restarted successfully.",
+					),
+				);
+				log(
+					chalk.green(
+						`Dashboard available at: http://localhost:${config.webhook.webhookPort}/dashboard`,
+					),
+				);
 			} catch (error) {
-				log(chalk.red(`Failed to restart webhook server: ${error.message}`));
+				log(
+					chalk.red(
+						`Failed to restart webhook server: ${error.message}`,
+					),
+				);
 			}
 		};
 
 		const handleCheckStatus = async () => {
-			try {
-				const pm2Status = execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" }).toString();
-				if (pm2Status.includes("online")) {
-					log(chalk.green("Webhook server is running."));
-					log(chalk.green(`Dashboard available at: http://localhost:${config.webhook.webhookPort}/dashboard`));
-				} else {
-					log(chalk.red("Webhook server is not running."));
-				}
-			} catch (error) {
+			const info = getPm2Status(
+				config.webhook?.pm2Name,
+			);
+			if (info?.status === "online") {
+				log(chalk.green("Webhook server is running."));
+				log(
+					chalk.green(
+						`Dashboard available at: http://localhost:${config.webhook.webhookPort}/dashboard`,
+					),
+				);
+			} else {
 				log(chalk.red("Webhook server is not running."));
 			}
 		};
 
 		const handleStop = async () => {
-			try {
-				// First check if process exists
-				execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" });
-
-				// If it exists, stop and delete it
-				try {
-					execSync(`pm2 stop ${config.webhook.pm2Name}`, { stdio: "pipe" });
-					execSync(`pm2 delete ${config.webhook.pm2Name}`, { stdio: "pipe" });
-					log(chalk.green("Webhook server stopped successfully."));
-				} catch (error) {
-					log(chalk.red(`Failed to stop webhook server: ${error.message}`));
-				}
-			} catch (error) {
-				// Process doesn't exist
-				log(chalk.yellow("Webhook server is not running."));
+			if (config.webhook?.pm2Name) {
+				pm2DeleteIfExists(config.webhook.pm2Name);
+				pm2Save();
+				log(
+					chalk.green(
+						"Webhook server stopped successfully.",
+					),
+				);
+			} else {
+				log(
+					chalk.yellow("Webhook server is not running."),
+				);
 			}
 		};
 
 		const handleShowLogs = async () => {
 			try {
-				// First check if process exists
-				execSync(`pm2 describe ${config.webhook.pm2Name}`, { stdio: "pipe" });
+				execFileSync("pm2", ["describe", config.webhook.pm2Name], { stdio: "pipe" });
 
-				const { logType } = await inquirer.prompt([{
-					type: "list",
-					name: "logType",
-					message: "Which logs would you like to see?",
-					choices: ["Output Logs", "Error Logs"]
-				}]);
+				const { logType } = await inquirer.prompt([
+					{
+						type: "list",
+						name: "logType",
+						message:
+							"Which logs would you like to see?",
+						choices: ["Output Logs", "Error Logs"],
+					},
+				]);
 
-				const logCommand = logType === "Output Logs"
-					? `pm2 logs ${config.webhook.pm2Name} --lines 100`
-					: `pm2 logs ${config.webhook.pm2Name} --err --lines 100`;
+				const logCommand =
+					logType === "Output Logs"
+						? `pm2 logs ${config.webhook.pm2Name} --lines 100`
+						: `pm2 logs ${config.webhook.pm2Name} --err --lines 100`;
 
 				execSync(logCommand, { stdio: "inherit" });
-			} catch (error) {
-				log(chalk.yellow("Webhook server is not running. No logs available."));
+			} catch {
+				log(
+					chalk.yellow(
+						"Webhook server is not running. No logs available.",
+					),
+				);
 			}
 		};
 
@@ -1467,43 +1718,69 @@ program
 					type: "input",
 					name: "username",
 					message: "Enter dashboard username:",
-					default: config.dashboard?.username || "admin"
+					default:
+						config.dashboard?.username || "admin",
 				},
 				{
 					type: "password",
 					name: "password",
-					message: "Enter dashboard password:"
-				}
+					message: "Enter dashboard password:",
+				},
 			]);
 
-			const hashedPassword = await bcrypt.hash(password, 10);
-			config.dashboard = { username, password: hashedPassword };
-			fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-			log(chalk.green("Dashboard credentials saved successfully."));
+			const hashedPassword = await bcryptjs.hash(
+				password,
+				10,
+			);
+			withConfig((c) => {
+				c.dashboard = {
+					username,
+					password: hashedPassword,
+				};
+			});
+			log(
+				chalk.green(
+					"Dashboard credentials saved successfully.",
+				),
+			);
 		};
 
 		const handleDashboard = async () => {
-			if (!config.dashboard?.username || !config.dashboard?.password) {
-				const { setupDashboard } = await inquirer.prompt([{
-					type: "confirm",
-					name: "setupDashboard",
-					message: "Dashboard credentials not found. Would you like to set them up now?",
-					default: true
-				}]);
+			if (
+				!config.dashboard?.username ||
+				!config.dashboard?.password
+			) {
+				const { setupDashboard } = await inquirer.prompt([
+					{
+						type: "confirm",
+						name: "setupDashboard",
+						message:
+							"Dashboard credentials not found. Would you like to set them up now?",
+						default: true,
+					},
+				]);
 
 				if (setupDashboard) {
 					await handleDashboardCredentials();
 				} else {
-					log(chalk.yellow("Dashboard access requires credentials to be set up."));
+					log(
+						chalk.yellow(
+							"Dashboard access requires credentials to be set up.",
+						),
+					);
 					return;
 				}
 			} else {
-				const { updateCredentials } = await inquirer.prompt([{
-					type: "confirm",
-					name: "updateCredentials",
-					message: "Would you like to update the dashboard credentials?",
-					default: false
-				}]);
+				const { updateCredentials } =
+					await inquirer.prompt([
+						{
+							type: "confirm",
+							name: "updateCredentials",
+							message:
+								"Would you like to update the dashboard credentials?",
+							default: false,
+						},
+					]);
 
 				if (updateCredentials) {
 					await handleDashboardCredentials();
@@ -1513,32 +1790,51 @@ program
 
 		const handleUpdate = async () => {
 			try {
-				log(chalk.yellow("Updating webhook server..."));
-				execSync(`cd ${webhookPath} && git pull`, { stdio: "inherit" });
-				execSync(`cd ${webhookPath} && npm install`, { stdio: "inherit" });
+				log(
+					chalk.yellow("Updating webhook server..."),
+				);
+				execSync(
+					`cd ${webhookPath} && git pull`,
+					{ stdio: "inherit" },
+				);
+				execSync(
+					`cd ${webhookPath} && npm install`,
+					{ stdio: "inherit" },
+				);
 				await handleRestart();
-				log(chalk.green("Webhook server updated successfully."));
+				log(
+					chalk.green(
+						"Webhook server updated successfully.",
+					),
+				);
 			} catch (error) {
-				log(chalk.red(`Failed to update webhook server: ${error.message}`));
+				log(
+					chalk.red(
+						`Failed to update webhook server: ${error.message}`,
+					),
+				);
 			}
 		};
 
 		if (isWebhookServerRunning()) {
 			const actionHandlers = {
-				"Restart": handleRestart,
+				Restart: handleRestart,
 				"Check Status": handleCheckStatus,
-				"Stop": handleStop,
+				Stop: handleStop,
 				"Show Logs": handleShowLogs,
-				"Dashboard": handleDashboard,
-				"Update": handleUpdate
+				Dashboard: handleDashboard,
+				Update: handleUpdate,
 			};
 
-			const { action } = await inquirer.prompt([{
-				type: "list",
-				name: "action",
-				message: "Webhook server is running. What would you like to do?",
-				choices: Object.keys(actionHandlers)
-			}]);
+			const { action } = await inquirer.prompt([
+				{
+					type: "list",
+					name: "action",
+					message:
+						"Webhook server is running. What would you like to do?",
+					choices: Object.keys(actionHandlers),
+				},
+			]);
 
 			await actionHandlers[action]();
 		} else {
@@ -1546,7 +1842,10 @@ program
 		}
 	});
 
-// Deploy project
+// ---------------------------------------------------------------------------
+// Deploy command
+// ---------------------------------------------------------------------------
+
 program
 	.command("deploy")
 	.description("Deploy a Next.js or Node.js project from GitHub")
@@ -1556,23 +1855,27 @@ program
 	.action(async (cmd) => {
 		try {
 			let { owner, repo, port } = cmd;
-			// Read stored username from config
+			const config = readConfig();
+
 			let defaultOwner = owner;
 			if (config.github?.username) {
 				defaultOwner = owner || config.github.username;
 			}
+
 			const answers = await inquirer.prompt([
 				{
 					type: "input",
 					name: "owner",
-					message: "Enter the GitHub repository owner/org name:",
+					message:
+						"Enter the GitHub repository owner/org name:",
 					default: defaultOwner,
 					when: () => !owner,
 				},
 				{
 					type: "input",
 					name: "repo",
-					message: "Enter the GitHub repository name:",
+					message:
+						"Enter the GitHub repository name:",
 					when: () => !repo,
 				},
 				{
@@ -1587,20 +1890,24 @@ program
 					message:
 						"Do you want to specify a port for this Node.js application?",
 					default: false,
-					when: (answers) => answers.projectType === "Node.js" && !port,
+					when: (a) =>
+						a.projectType === "Node.js" && !port,
 				},
 				{
 					type: "input",
 					name: "port",
-					message: "Enter the port to deploy the application:",
-					when: (answers) =>
-						(!port && answers.projectType === "Next.js") || answers.needsPort,
+					message:
+						"Enter the port to deploy the application:",
+					when: (a) =>
+						(!port &&
+							a.projectType === "Next.js") ||
+						a.needsPort,
 					validate: (input) => {
-						const portNumber = Number.parseInt(input, 10);
+						const n = Number.parseInt(input, 10);
 						if (
-							Number.isNaN(portNumber) ||
-							portNumber <= 0 ||
-							portNumber > 65535
+							Number.isNaN(n) ||
+							n <= 0 ||
+							n > 65535
 						) {
 							return "Please enter a valid port number between 1 and 65535.";
 						}
@@ -1615,124 +1922,38 @@ program
 			port = port || answers.port;
 
 			if (!owner || !repo) {
-				log(chalk.red("Error: Missing required arguments."));
+				log(
+					chalk.red("Error: Missing required arguments."),
+				);
 				process.exit(1);
 			}
 
-			if (owner.length === 0 || repo.length === 0) {
-				log(chalk.red("Error: Arguments cannot be empty."));
-				process.exit(1);
-			}
+			validateName(owner, "owner");
+			validateName(repo, "repo");
 
 			if (projectType === "Next.js" && !port) {
-				log(chalk.red("Error: Port is required for Next.js projects."));
-				process.exit(1);
-			}
-
-			const existingProject = config.projects.find((p) => p.repo === repo);
-
-			if (existingProject) {
 				log(
-					chalk.yellowBright(
-						`\nProject ${chalk.bold(
-							repo,
-						)} already exists. \nUse the ${chalk.bold(
-							"manage",
-						)} command to manage the project or the ${chalk.bold(
-							"list",
-						)} command to view all your deployed projects.\n`,
+					chalk.red(
+						"Error: Port is required for Next.js projects.",
 					),
 				);
 				process.exit(1);
 			}
 
-			const isPortInUse = (port) => {
-				return new Promise((resolve) => {
-					const server = net.createServer();
-
-					server.once("error", (err) => {
-						if (err.code === "EADDRINUSE") {
-							resolve(true);
-						} else {
-							resolve(false);
-						}
-					});
-
-					server.once("listening", () => {
-						server.close();
-						resolve(false);
-					});
-
-					server.listen(port);
-				});
-			};
-
-			const getAvailablePort = async (port) => {
-				let newPort = port;
-
-				while (await isPortInUse(newPort)) {
-					const answer = await inquirer.prompt([
-						{
-							type: "input",
-							name: "port",
-							message: `Port ${newPort} is already in use. Please enter another port:`,
-							validate: (input) => {
-								const portNumber = Number.parseInt(input, 10);
-								return Number.isInteger(portNumber) &&
-									portNumber > 0 &&
-									portNumber <= 65535
-									? true
-									: "Please enter a valid port number (1-65535).";
-							},
-						},
-					]);
-					newPort = Number.parseInt(answer.port, 10);
-				}
-
-				return newPort;
-			};
+			const existingProject = config.projects.find(
+				(p) => p.repo === repo,
+			);
+			if (existingProject) {
+				log(
+					chalk.yellowBright(
+						`\nProject ${chalk.bold(repo)} already exists. \nUse the ${chalk.bold("manage")} command to manage the project or the ${chalk.bold("list")} command to view all your deployed projects.\n`,
+					),
+				);
+				process.exit(1);
+			}
 
 			if (port) {
 				port = await getAvailablePort(port);
-			}
-
-			const git = simpleGit();
-			const repoPath = `${projectsDir}/${repo}`;
-
-			// Check if the directory already exists and is not empty
-			if (fs.existsSync(repoPath) && fs.readdirSync(repoPath).length > 0) {
-				const existingProject = config.projects.find((p) => p.repo === repo);
-				if (!existingProject) {
-					log(
-						`⚠️  Directory ${chalk
-							.hex("#FFA500")
-							.bold(repoPath)} exists and is not linked to any project.`,
-					);
-					const { deleteFolder } = await inquirer.prompt([
-						{
-							type: "confirm",
-							name: "deleteFolder",
-							message: `Delete ${repoPath} and continue?`,
-							default: false,
-						},
-					]);
-
-					if (deleteFolder) {
-						fs.removeSync(repoPath);
-					} else {
-						log(chalk.yellow("Operation cancelled."));
-						process.exit(1);
-					}
-				} else {
-					log(
-						`⚠️ Directory ${chalk
-							.hex("#FFA500")
-							.bold(repoPath)} exists and is not empty. Use ${chalk.green(
-								"manage",
-							)} to manage the project.`,
-					);
-					process.exit(1);
-				}
 			}
 
 			if (!config.github || !config.github.access_token) {
@@ -1742,26 +1963,128 @@ program
 					),
 				);
 				log(
-					`You can run the ${chalk.green(
-						"quicky init",
-					)} command to save your GitHub account details.`,
+					`You can run the ${chalk.green("quicky init")} command to save your GitHub account details.`,
 				);
 				process.exit(1);
 			}
 
-			await git.clone(
-				`https://${config.github.access_token}@github.com/${owner}/${repo}.git`,
-				repoPath,
-			);
+			const packageManager = config.packageManager || "npm";
+			if (packageManager === "bun") {
+				try {
+					execSync("bun -v", { stdio: "ignore" });
+				} catch {
+					try {
+						execSync("unzip -v", {
+							stdio: "ignore",
+						});
+					} catch {
+						log(
+							chalk.yellow(
+								"Unzip is not installed. Installing unzip...",
+							),
+						);
+						execSync(
+							"sudo apt-get install -y unzip",
+							{ stdio: "inherit" },
+						);
+					}
+					execSync(
+						"curl -fsSL https://bun.sh/install | bash",
+						{ stdio: "inherit" },
+					);
+				}
+			} else {
+				try {
+					execSync("npm -v", { stdio: "ignore" });
+				} catch {
+					log(
+						chalk.red(
+							"Error: npm is not installed. Please install Node.js to use npm.",
+						),
+					);
+					process.exit(1);
+				}
+			}
+
+			try {
+				const swapInfo = execSync("swapon --show", {
+					encoding: "utf-8",
+				});
+				if (!swapInfo.includes("/swapfile")) {
+					throw new Error("no swap");
+				}
+			} catch {
+				try {
+					log(
+						chalk.yellow("Creating swap space..."),
+					);
+					execSync(
+						"sudo fallocate -l 1G /swapfile",
+						{ stdio: "inherit" },
+					);
+					execSync("sudo chmod 600 /swapfile", {
+						stdio: "inherit",
+					});
+					execSync("sudo mkswap /swapfile", {
+						stdio: "inherit",
+					});
+					execSync("sudo swapon /swapfile", {
+						stdio: "inherit",
+					});
+					execSync(
+						"echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab",
+						{ stdio: "inherit" },
+					);
+					log(
+						chalk.green(
+							"✔ Swap space created and enabled successfully.",
+						),
+					);
+				} catch (error) {
+					log(
+						chalk.yellow(
+							`Failed to create swap space: ${error.message}`,
+						),
+					);
+					log(
+						chalk.yellow(
+							"Continuing without swap space...",
+						),
+					);
+				}
+			}
+
+			try {
+				execSync("pm2 -v", { stdio: "ignore" });
+			} catch {
+				try {
+					execSync("npm install -g pm2", {
+						stdio: "inherit",
+					});
+				} catch {
+					console.error(
+						chalk.red(
+							"PM2 is not installed. Please install it using `npm install -g pm2`",
+						),
+					);
+					process.exit(1);
+				}
+			}
 
 			let pid = uuidv4().slice(0, 5);
+			if (config.projects.some((p) => p.pid === pid)) {
+				pid = uuidv4().slice(0, 5);
+			}
 
-			pid =
-				config.projects.filter((p) => p.pid === pid).length > 0
-					? uuidv4().slice(0, 5)
-					: pid;
+			const project = {
+				pid,
+				owner,
+				repo,
+				port: port ? Number(port) : undefined,
+				type: projectType.toLowerCase(),
+				last_updated: new Date().toISOString(),
+			};
 
-			// Prompt user to add a .env file or not
 			const { addEnv } = await inquirer.prompt([
 				{
 					type: "confirm",
@@ -1772,286 +2095,60 @@ program
 			]);
 
 			if (addEnv) {
-				const envFilePath = `${projectsDir}/${repo}/.env`;
-				fs.writeFileSync(
-					envFilePath,
-					"# Add your environment variables below\n",
-					{ flag: "wx" },
-				);
-				execSync(`nano ${envFilePath}`, { stdio: "inherit" });
+				ensureReleaseLayout(repo);
+				const sharedDir = getSharedDir(repo);
+				const envFilePath = path.join(sharedDir, ".env");
+				if (!fs.existsSync(envFilePath)) {
+					fs.writeFileSync(
+						envFilePath,
+						"# Add your environment variables below\n",
+					);
+				}
+				execSync(`nano ${envFilePath}`, {
+					stdio: "inherit",
+				});
 			}
 
 			log(
 				chalk.green(
-					`✔ Project ${chalk.bold(repo)} cloned successfully. Deploying...`,
+					`✔ Deploying ${chalk.bold(repo)}...`,
 				),
 			);
 
-			const packageManager = config.packageManager || "npm";
-
-			// If package manager is bun, install bun and run bun install
-			if (packageManager === "bun") {
-				try {
-					execSync("bun -v", { stdio: "ignore" });
-				} catch (error) {
-					try {
-						execSync("unzip -v", { stdio: "ignore" });
-					} catch (error) {
-						log(chalk.yellow("Unzip is not installed. Installing unzip..."));
-						execSync("sudo apt-get install -y unzip", { stdio: "inherit" });
-					} finally {
-						await execSync("curl -fsSL https://bun.sh/install | bash", {
-							stdio: "inherit",
-						});
-
-						execSync("source ~/.bashrc", { stdio: "inherit" });
-					}
-				}
-			} else {
-				try {
-					execSync("npm -v", { stdio: "ignore" });
-				} catch (error) {
-					log(
-						chalk.red(
-							"Error: npm is not installed. Please install Node.js to use npm.",
-						),
-					);
-					process.exit(1);
-				}
-			}
-
-			// Try to create swap space but continue if it fails
-			const checkSwap = () => {
-				try {
-					const swapInfo = execSync("swapon --show", { encoding: "utf-8" });
-					return swapInfo.includes("/swapfile");
-				} catch (error) {
-					return false;
-				}
-			};
-
-			const createSwap = () => {
-				try {
-					log(chalk.yellow("Creating swap space..."));
-					execSync("sudo fallocate -l 1G /swapfile", { stdio: "inherit" });
-					execSync("sudo chmod 600 /swapfile", { stdio: "inherit" });
-					execSync("sudo mkswap /swapfile", { stdio: "inherit" });
-					execSync("sudo swapon /swapfile", { stdio: "inherit" });
-					execSync(
-						"echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab",
-						{ stdio: "inherit" },
-					);
-					log(chalk.green("✔ Swap space created and enabled successfully."));
-				} catch (error) {
-					log(chalk.yellow(`Failed to create swap space: ${error.message}`));
-					log(chalk.yellow("Continuing without swap space..."));
-				}
-			};
-
-			if (!checkSwap()) {
-				createSwap();
-			}
-
-			const installCommand =
-				packageManager === "bun" ? "bun install" : "npm install";
-			const buildCommand =
-				packageManager === "bun" ? "bun run build" : "npm run build";
-			if (projectType.toLowerCase() === "next.js" && !port) {
-				console.error(
-					chalk.red("Error: Port must be specified for Next.js applications"),
-				);
-				process.exit(1);
-			}
-			const startCommand =
-				projectType.toLowerCase() === "next.js"
-					? `pm2 start npm --name "${repo}" -- start -- --port ${port}`
-					: port
-						? `pm2 start npm --name "${repo}" -- start -- --port ${port}`
-						: `pm2 start index.js --name "${repo}"`;
-
-			// Install dependencies and build the project
-			try {
-				execSync(`cd ${projectsDir}/${repo} && ${installCommand}`, {
-					stdio: "inherit",
-				});
-			} catch (error) {
-				console.error(
-					chalk.red(`Failed to install dependencies: ${error.message}`),
-				);
-				process.exit(1);
-			}
-
-			// Check for build script in package.json for both Next.js and Node.js projects
-			try {
-				const packageJson = JSON.parse(
-					fs.readFileSync(`${projectsDir}/${repo}/package.json`, "utf8"),
-				);
-				const hasBuildScript = packageJson.scripts?.build;
-
-				if (hasBuildScript) {
-					try {
-						execSync(`cd ${projectsDir}/${repo} && ${buildCommand}`, {
-							stdio: "inherit",
-						});
-					} catch (error) {
-						console.error(
-							chalk.red(`Failed to build the project: ${error.message}`),
-						);
-						process.exit(1);
-					}
-				}
-			} catch (error) {
-				console.error(
-					chalk.yellow(
-						`Warning: Could not read package.json: ${error.message}`,
-					),
-				);
-			}
-
-			try {
-				try {
-					execSync("pm2 -v", { stdio: "ignore" });
-				} catch (error) {
-					execSync("npm install -g pm2", { stdio: "inherit" });
-				}
-			} catch (error) {
-				console.error(
-					chalk.red(
-						"PM2 is not installed. Please install it using `npm install -g pm2`",
-					),
-				);
-				process.exit(1);
-			}
-
-			execSync(`cd ${projectsDir}/${repo} && ${startCommand}`, {
-				stdio: "inherit",
+			await deployOrUpdate(project, {
+				promptEnv: false,
+				isInitialDeploy: true,
 			});
 
-			// Set up the webhook for the repository
-			const webhookId = await setupWebhook(`${owner}/${repo}`);
+			const webhookId = await setupWebhook(
+				`${owner}/${repo}`,
+			);
 
-			// Save the webhook ID to the project configuration
-			updateProjectsConfig({
-				pid,
-				owner,
-				repo,
-				port,
-				webhookId,
-				type: projectType.toLowerCase(),
+			withConfig((c) => {
+				project.webhookId = webhookId;
+				const existing = c.projects.find(
+					(p) => p.repo === repo,
+				);
+				if (existing) {
+					Object.assign(existing, project);
+				} else {
+					c.projects.push(project);
+				}
 			});
+
+			pm2Save();
 
 			log(
-				`${projectType} project deployed successfully${port ? ` on port ${port}` : ""
-				}`,
+				`${projectType} project deployed successfully${port ? ` on port ${port}` : ""}`,
 			);
 		} catch (error) {
 			console.error(chalk.red(`Error: ${error.message}`));
 		}
 	});
 
-// list all projects and domains
-const status = () => {
-	const table = new Table({
-		head: [
-			chalk.cyan.bold("PID"),
-			chalk.cyan.bold("Owner"),
-			chalk.cyan.bold("Repository"),
-			chalk.cyan.bold("Port"),
-			chalk.cyan.bold("Status"),
-			chalk.cyan.bold("Memory"),
-			chalk.cyan.bold("Disk Space"),
-			chalk.cyan.bold("Last Updated"),
-			chalk.cyan.bold("Errors"),
-		],
-		style: {
-			head: ["cyan", "bold"],
-		},
-		wordWrap: true,
-		colWidths: [8, 12, 15, 8, 12, 12, 12, 15, 25],
-	});
-
-	for (const project of config.projects) {
-		let pm2Status = "Not Running";
-		let memory = "N/A";
-		let diskSpace = "N/A";
-		let errorMsg = "";
-
-		try {
-			const pm2List = execSync("pm2 jlist", { encoding: "utf-8" });
-			const pm2Instances = JSON.parse(pm2List);
-			const instance = pm2Instances.find((inst) => inst.name === project.repo);
-
-			if (instance) {
-				pm2Status = instance.pm2_env.status;
-				memory = `${Math.round(instance.monit.memory / (1024 * 1024))}MB`;
-
-				// Get project directory size
-				const projectPath = `${projectsDir}/${project.repo}`;
-				if (fs.existsSync(projectPath)) {
-					const size = execSync(`du -sh "${projectPath}" | cut -f1`, {
-						encoding: "utf-8",
-					}).trim();
-					diskSpace = size;
-				}
-
-				// Only check for errors if status is not online
-				if (
-					instance.pm2_env.status !== "online" &&
-					instance.pm2_env.pm_err_log_path &&
-					fs.existsSync(instance.pm2_env.pm_err_log_path)
-				) {
-					const errors = execSync(
-						`tail -n 1 "${instance.pm2_env.pm_err_log_path}"`,
-						{ encoding: "utf-8" },
-					).trim();
-					if (errors) {
-						errorMsg =
-							errors.substring(0, 25) + (errors.length > 25 ? "..." : "");
-						// Prompt user to view full error log
-						inquirer
-							.prompt([
-								{
-									type: "confirm",
-									name: "viewErrors",
-									message: `Would you like to view the full error log for ${project.repo}?`,
-									default: false,
-								},
-							])
-							.then((answer) => {
-								if (answer.viewErrors) {
-									console.log(chalk.red("\nFull error message:"));
-									console.log(errors);
-								}
-							});
-					}
-				}
-			}
-		} catch (error) {
-			pm2Status = "Error";
-			errorMsg =
-				error.message.substring(0, 25) +
-				(error.message.length > 25 ? "..." : "");
-		}
-
-		table.push([
-			chalk.yellow.bold(project.pid),
-			chalk.white(project.owner),
-			chalk.white(project.repo),
-			project.port ? chalk.greenBright.bold(project.port) : chalk.gray("N/A"),
-			pm2Status === "online" ? chalk.green(pm2Status) : chalk.red(pm2Status),
-			chalk.white(memory),
-			chalk.white(diskSpace),
-			chalk.white(
-				formatDistanceToNow(new Date(project.last_updated), {
-					addSuffix: true,
-				}),
-			),
-			chalk.gray("-"),
-		]);
-	}
-
-	log(table.toString());
-};
+// ---------------------------------------------------------------------------
+// List command
+// ---------------------------------------------------------------------------
 
 program
 	.command("list")
@@ -2059,6 +2156,7 @@ program
 		"List the current configuration, associated PM2 instances, and domains",
 	)
 	.action(() => {
+		const config = readConfig();
 		if (config.projects.length === 0) {
 			log(chalk.yellow("No projects found."));
 			return;
@@ -2067,162 +2165,172 @@ program
 		status();
 
 		log(
-			`\nTo manage your projects, use the ${chalk.blue(
-				"quicky manage",
-			)} command. You can ${chalk.blue("start")}, ${chalk.blue(
-				"stop",
-			)}, ${chalk.blue("restart")}, ${chalk.blue("update")}, or ${chalk.red(
-				"delete",
-			)} your projects.`,
+			`\nTo manage your projects, use the ${chalk.blue("quicky manage")} command. You can ${chalk.blue("start")}, ${chalk.blue("stop")}, ${chalk.blue("restart")}, ${chalk.blue("update")}, or ${chalk.red("delete")} your projects.`,
 		);
-		log(`For more details, visit ${chalk.green("https://quicky.dev")}\n`);
+		log(
+			`For more details, visit ${chalk.green("https://quicky.dev")}\n`,
+		);
 	});
 
-// start / stop / restart projects (pm2 wrapper) also delete projects
+// ---------------------------------------------------------------------------
+// Manage command
+// ---------------------------------------------------------------------------
+
 program
 	.command("manage")
-	.description("start, stop, restart, update, or delete a project")
+	.description(
+		"start, stop, restart, update, or delete a project",
+	)
 	.action(async () => {
 		try {
+			const config = readConfig();
+
 			if (!config.projects.length) {
 				log(chalk.red("No projects found to manage."));
 				return;
 			}
 
-			// List all projects and their status
 			status();
 
-			const { selectedProject, action } = await inquirer.prompt([
-				{
-					type: "list",
-					name: "selectedProject",
-					message: "Select a project to manage:",
-					choices: config.projects.map((project) => project.repo),
-				},
-				{
-					type: "list",
-					name: "action",
-					message: "What action would you like to perform?",
-					choices: ["start", "stop", "restart", "update", "delete"],
-				},
-			]);
+			const { selectedProject, action } =
+				await inquirer.prompt([
+					{
+						type: "list",
+						name: "selectedProject",
+						message: "Select a project to manage:",
+						choices: config.projects.map(
+							(project) => project.repo,
+						),
+					},
+					{
+						type: "list",
+						name: "action",
+						message:
+							"What action would you like to perform?",
+						choices: [
+							"start",
+							"stop",
+							"restart",
+							"update",
+							"delete",
+						],
+					},
+				]);
 
-			const project = config.projects.find((p) => p.repo === selectedProject);
+			const project = config.projects.find(
+				(p) => p.repo === selectedProject,
+			);
 
 			if (!project) {
-				log(chalk.red("Error: Selected project not found."));
+				log(
+					chalk.red(
+						"Error: Selected project not found.",
+					),
+				);
 				return;
 			}
 
 			if (action === "update") {
-				// Update a running project with the latest changes from the GitHub repository
-				updateProject(project, true);
+				await deployOrUpdate(project, {
+					promptEnv: true,
+				});
 			} else if (action === "delete") {
-				try {
-					if (!config.projects.length) {
-						log(chalk.yellowBright("No projects found to delete."));
-						return;
-					}
+				const { confirmDelete } = await inquirer.prompt([
+					{
+						type: "confirm",
+						name: "confirmDelete",
+						message: `Are you sure you want to delete the project ${chalk.redBright(selectedProject)}?`,
+						default: false,
+					},
+				]);
 
-					const { confirmDelete } = await inquirer.prompt([
-						{
-							type: "confirm",
-							name: "confirmDelete",
-							message: `Are you sure you want to delete the project ${chalk.redBright(
-								selectedProject,
-							)}?`,
-							default: false,
-						},
-					]);
+				if (confirmDelete) {
+					const spinner = createSpinner(
+						"Deleting the project...",
+					).start();
+					await sleep(1000);
 
-					if (confirmDelete) {
-						const spinner = createSpinner("Deleting the project...").start();
-						await sleep(1000);
+					pm2DeleteIfExists(project.repo);
 
-						const project = config.projects.find(
-							(p) => p.repo === selectedProject,
+					const projectRoot = getProjectRoot(
+						project.repo,
+					);
+					fs.removeSync(projectRoot);
+
+					log(
+						chalk.green(
+							`\n✔ Project ${project.repo} deleted successfully.`,
+						),
+					);
+
+					withConfig((c) => {
+						c.projects = c.projects.filter(
+							(p) => p.repo !== selectedProject,
 						);
-						if (project) {
-							const repoPath = `${projectsDir}/${project.repo}`;
-
-							// Stop and delete the project from PM2 if it exists
-							try {
-								execSync(`pm2 stop ${project.repo}`, { stdio: "ignore" });
-								execSync(`pm2 del ${project.repo}`, { stdio: "ignore" });
-							} catch (error) {
-								log(
-									chalk.yellow(
-										`\nProject ${project.repo} is not running on PM2. Skipping...`,
-									),
-								);
-							}
-
-							// Remove the project directory
-							execSync(`rm -rf ${repoPath}`);
-
-							log(
-								chalk.green(
-									`\n✔ Project ${project.repo} deleted successfully.`,
-								),
+						if (c.domains && c.domains.length > 0) {
+							c.domains = c.domains.filter(
+								(domain) =>
+									domain.pid !== project.pid,
 							);
-
-							// Remove the project from the configuration file
-							config.projects = config.projects.filter(
-								(p) => p.repo !== selectedProject,
-							);
-
-							// Remove associated domains
-							if (config.domains && config.domains.length > 0) {
-								config.domains = config.domains.filter(
-									(domain) => domain.pid !== project.pid,
-								);
-							}
-
-							// Delete the nginx config file and restart nginx
-							const nginxConfigFile = `/etc/nginx/sites-available/${selectedProject}`;
-							const nginxSymlinkFile = `/etc/nginx/sites-enabled/${selectedProject}`;
-
-							if (fs.existsSync(nginxConfigFile)) {
-								execSync(`sudo rm -f ${nginxConfigFile}`, { stdio: "inherit" });
-							}
-
-							if (fs.existsSync(nginxSymlinkFile)) {
-								execSync(`sudo rm -f ${nginxSymlinkFile}`, {
-									stdio: "inherit",
-								});
-							}
-
-							execSync("sudo service nginx restart", { stdio: "inherit" });
-
-							// Remove webhook if it exists
-							if (project.webhookId) {
-								await removeWebhook(
-									`${project.owner}/${project.repo}`,
-									project.webhookId,
-								);
-							}
-
-							saveConfig(config);
 						}
+					});
 
-						spinner.success({
-							text: `Project ${selectedProject} deleted successfully.`,
+					const nginxConfigFile = `/etc/nginx/sites-available/${selectedProject}`;
+					const nginxSymlinkFile = `/etc/nginx/sites-enabled/${selectedProject}`;
+
+					if (fs.existsSync(nginxConfigFile)) {
+						execFileSync("sudo", ["rm", "-f", nginxConfigFile], {
+							stdio: "inherit",
 						});
-
-						process.exit(0);
-					} else {
-						log(chalk.yellow("Project deletion cancelled."));
-						process.exit(0);
 					}
-				} catch (error) {
-					console.error(chalk.red(`Error: ${error.message}`));
+					if (fs.existsSync(nginxSymlinkFile)) {
+						execFileSync("sudo", ["rm", "-f", nginxSymlinkFile], {
+							stdio: "inherit",
+						});
+					}
+
+					try {
+						execSync(
+							"sudo service nginx restart",
+							{ stdio: "inherit" },
+						);
+					} catch {
+						/* nginx may not be installed locally */
+					}
+
+					if (project.webhookId) {
+						await removeWebhook(
+							`${project.owner}/${project.repo}`,
+							project.webhookId,
+						);
+					}
+
+					pm2Save();
+
+					spinner.success({
+						text: `Project ${selectedProject} deleted successfully.`,
+					});
+
+					process.exit(0);
+				} else {
+					log(
+						chalk.yellow(
+							"Project deletion cancelled.",
+						),
+					);
+					process.exit(0);
 				}
 			} else {
-				const pm2Command = `pm2 ${action} ${project.repo}`;
-
 				try {
-					execSync(pm2Command, { stdio: "inherit" });
-					log(chalk.green(`Project ${project.repo} ${action}ed successfully.`));
+					execFileSync("pm2", [action, project.repo], {
+						stdio: "inherit",
+					});
+					pm2Save();
+					log(
+						chalk.green(
+							`Project ${project.repo} ${action}ed successfully.`,
+						),
+					);
 				} catch (error) {
 					console.error(
 						chalk.red(
@@ -2236,18 +2344,27 @@ program
 		}
 	});
 
+// ---------------------------------------------------------------------------
+// Update command
+// ---------------------------------------------------------------------------
+
 program
 	.command("update <pid>")
 	.description("Update a project by its PID")
 	.action(async (pid) => {
 		try {
-			const project = config.projects.find((p) => p.pid === pid);
+			const config = readConfig();
+			const project = config.projects.find(
+				(p) => p.pid === pid,
+			);
 			if (!project) {
-				console.error(chalk.red(`Project with PID ${pid} not found.`));
+				console.error(
+					chalk.red(`Project with PID ${pid} not found.`),
+				);
 				process.exit(1);
 			}
 
-			await updateProject(project, false);
+			await deployOrUpdate(project, { promptEnv: false });
 
 			process.exit(0);
 		} catch (error) {
@@ -2256,23 +2373,31 @@ program
 		}
 	});
 
-// Manage domains and subdomains for the projects
+// ---------------------------------------------------------------------------
+// Domains command
+// ---------------------------------------------------------------------------
+
 program
 	.command("domains")
-	.description("Manage domains and subdomains for the projects")
+	.description(
+		"Manage domains and subdomains for the projects",
+	)
 	.action(async () => {
 		try {
-			// Read project list to get a list of existing projects and their ports.
+			const config = readConfig();
 			const projects = config.projects;
 
 			if (projects.length === 0) {
-				log(chalk.yellow("No projects found. Please deploy a project first."));
+				log(
+					chalk.yellow(
+						"No projects found. Please deploy a project first.",
+					),
+				);
 				return;
 			}
 
-			// check if there are any domains already associated with the projects
-			if (config.domains?.length > 0) {
-				await handleListDomains(projects);
+			if ((config.domains || []).length > 0) {
+				await handleListDomains(projects, config);
 			}
 
 			const { action } = await inquirer.prompt([
@@ -2280,82 +2405,108 @@ program
 					type: "list",
 					name: "action",
 					message: "What would you like to do?",
-					choices: ["Add Domain", "Remove Domain"],
+					choices: [
+						"Add Domain",
+						"Remove Domain",
+					],
 				},
 			]);
 
 			if (action === "Add Domain") {
-				const { project, domain } = await inquirer.prompt([
-					{
-						type: "list",
-						name: "project",
-						message: "Select a project to associate the domain with:",
-						choices: projects.map((p) => p.repo),
-					},
-					{
-						type: "input",
-						name: "domain",
-						message: "Enter domain to add to the project:",
-						validate: (input) => {
-							// Basic domain validation
-							const domainRegex = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-							return domainRegex.test(input)
-								? true
-								: "Please enter a valid domain.";
+				const { project, domain } =
+					await inquirer.prompt([
+						{
+							type: "list",
+							name: "project",
+							message:
+								"Select a project to associate the domain with:",
+							choices: projects.map(
+								(p) => p.repo,
+							),
 						},
-					},
-				]);
+						{
+							type: "input",
+							name: "domain",
+							message:
+								"Enter domain to add to the project:",
+							validate: (input) => {
+								const domainRegex =
+									/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+								return domainRegex.test(input)
+									? true
+									: "Please enter a valid domain.";
+							},
+						},
+					]);
 
-				const selectedProject = projects.find((p) => p.repo === project);
+				const selectedProject = projects.find(
+					(p) => p.repo === project,
+				);
 				if (!selectedProject) {
-					log(chalk.red("Error: Selected project not found."));
+					log(
+						chalk.red(
+							"Error: Selected project not found.",
+						),
+					);
 					return;
 				}
 
-				// setup the domain (add to nginx, certbot)
 				await setupDomain(domain, selectedProject.port);
 
-				// Update the config file with the new domain
-				const projectPid = selectedProject.pid;
-
-				if (!config.domains) {
-					config.domains = [];
-				}
-
-				config.domains.push({ pid: projectPid, domain });
-				saveConfig(config);
+				withConfig((c) => {
+					if (!c.domains) c.domains = [];
+					c.domains.push({
+						pid: selectedProject.pid,
+						domain,
+					});
+				});
 
 				log(
 					chalk.green(
 						`Domain ${domain} added successfully to project ${selectedProject.repo}.`,
 					),
 				);
-				log(chalk.green(`You can now access your project at https://${domain}`));
 				log(
-					`Please make sure your domain is pointing to this server's IP address. It may take up to 48 hours for DNS changes to take effect.`,
+					chalk.green(
+						`You can now access your project at https://${domain}`,
+					),
+				);
+				log(
+					"Please make sure your domain is pointing to this server's IP address. It may take up to 48 hours for DNS changes to take effect.",
 				);
 			} else if (action === "Remove Domain") {
 				const { project } = await inquirer.prompt([
 					{
 						type: "list",
 						name: "project",
-						message: "Select the project you want to remove a domain from:",
+						message:
+							"Select the project you want to remove a domain from:",
 						choices: projects.map((p) => p.repo),
 					},
 				]);
 
-				const selectedProject = projects.find((p) => p.repo === project);
+				const selectedProject = projects.find(
+					(p) => p.repo === project,
+				);
 
 				if (!selectedProject) {
-					log(chalk.red("Error: Selected project not found."));
+					log(
+						chalk.red(
+							"Error: Selected project not found.",
+						),
+					);
 					return;
 				}
 
-				const projectDomains = config.domains.filter(
-					(d) => d.pid === selectedProject.pid,
-				);
+				const projectDomains = (
+					config.domains || []
+				).filter((d) => d.pid === selectedProject.pid);
 				if (projectDomains.length === 0) {
-					log(chalk.red("Error: Selected project has no associated domains."));
+					log(
+						chalk.red(
+							"Error: Selected project has no associated domains.",
+						),
+					);
 					return;
 				}
 
@@ -2363,8 +2514,11 @@ program
 					{
 						type: "list",
 						name: "domain",
-						message: "Select the domain you want to remove:",
-						choices: projectDomains.map((d) => d.domain),
+						message:
+							"Select the domain you want to remove:",
+						choices: projectDomains.map(
+							(d) => d.domain,
+						),
 					},
 				]);
 
@@ -2375,8 +2529,7 @@ program
 		}
 	});
 
-// Function to list all domains and their associated projects
-async function handleListDomains(projects) {
+async function handleListDomains(projects, config) {
 	try {
 		if (projects.length === 0) {
 			log(chalk.yellow("No projects found."));
@@ -2389,15 +2542,12 @@ async function handleListDomains(projects) {
 				chalk.cyan.bold("Domain"),
 				chalk.cyan.bold("Port"),
 			],
-			style: {
-				head: ["cyan", "bold"],
-				border: ["grey"],
-			},
+			style: { head: ["cyan", "bold"], border: ["grey"] },
 			colWidths: [20, 30, 10],
 		});
 
 		for (const project of projects) {
-			const projectDomains = config.domains.filter(
+			const projectDomains = (config.domains || []).filter(
 				(d) => d.pid === project.pid,
 			);
 			for (const domain of projectDomains) {
@@ -2412,27 +2562,136 @@ async function handleListDomains(projects) {
 		log(chalk.green.bold("\nDomains Configuration:"));
 		log(table.toString());
 	} catch (error) {
-		console.error(chalk.red(`Failed to list domains: ${error.message}`));
+		console.error(
+			chalk.red(`Failed to list domains: ${error.message}`),
+		);
 	}
 }
 
-// Upgrade the CLI to the latest version
+// ---------------------------------------------------------------------------
+// Persist command
+// ---------------------------------------------------------------------------
+
+program
+	.command("persist <pid>")
+	.description("Manage persisted files for a project")
+	.argument("[action]", "add or remove", "list")
+	.argument("[filePath]", "relative path to persist")
+	.action(async (pid, action, filePath) => {
+		const config = readConfig();
+		const project = config.projects.find(
+			(p) => p.pid === pid,
+		);
+		if (!project) {
+			console.error(
+				chalk.red(`Project with PID ${pid} not found.`),
+			);
+			process.exit(1);
+		}
+
+		if (!project.persist) {
+			project.persist = [
+				".env",
+				".env.local",
+				".env.production",
+				".env.production.local",
+			];
+		}
+
+		if (action === "list" || !action) {
+			log(chalk.cyan.bold(`\nPersisted paths for ${project.repo}:`));
+			for (const p of project.persist) {
+				log(`  ${chalk.green("•")} ${p}`);
+			}
+			return;
+		}
+
+		if (action === "add") {
+			if (!filePath) {
+				console.error(
+					chalk.red("Please specify a file path to persist."),
+				);
+				process.exit(1);
+			}
+			if (!project.persist.includes(filePath)) {
+				project.persist.push(filePath);
+				withConfig((c) => {
+					const p = c.projects.find(
+						(p) => p.pid === pid,
+					);
+					if (p) p.persist = project.persist;
+				});
+				log(
+					chalk.green(
+						`Added "${filePath}" to persisted paths for ${project.repo}.`,
+					),
+				);
+			} else {
+				log(
+					chalk.yellow(
+						`"${filePath}" is already persisted.`,
+					),
+				);
+			}
+		} else if (action === "remove") {
+			if (!filePath) {
+				console.error(
+					chalk.red(
+						"Please specify a file path to remove.",
+					),
+				);
+				process.exit(1);
+			}
+			project.persist = project.persist.filter(
+				(p) => p !== filePath,
+			);
+			withConfig((c) => {
+				const p = c.projects.find(
+					(p) => p.pid === pid,
+				);
+				if (p) p.persist = project.persist;
+			});
+			log(
+				chalk.green(
+					`Removed "${filePath}" from persisted paths for ${project.repo}.`,
+				),
+			);
+		} else {
+			console.error(
+				chalk.red(
+					`Unknown action "${action}". Use "add", "remove", or "list".`,
+				),
+			);
+		}
+	});
+
+// ---------------------------------------------------------------------------
+// Upgrade command
+// ---------------------------------------------------------------------------
+
 program
 	.command("upgrade")
 	.description("Upgrade the CLI to the latest version")
 	.action(() => {
 		try {
-			// Get the currently installed version
-			const currentVersion = execSync("npm list -g quicky --depth=0", {
-				encoding: "utf-8",
-			}).match(/quicky@([\d.]+)/)[1];
+			let currentVersion;
+			try {
+				const output = execSync(
+					"npm list -g quicky --depth=0",
+					{ encoding: "utf-8" },
+				);
+				const match = output.match(/quicky@([\d.]+)/);
+				currentVersion = match ? match[1] : packageJson.version;
+			} catch {
+				currentVersion = packageJson.version;
+			}
 
-			// Get the latest version available in the npm registry
-			const latestVersion = execSync("npm show quicky version", {
-				encoding: "utf-8",
-			}).trim();
+			const registryVersion = execSync(
+				"npm show quicky version",
+				{ encoding: "utf-8" },
+			).trim();
 
-			if (currentVersion === latestVersion) {
+			if (currentVersion === registryVersion) {
 				console.log(
 					chalk.yellow(
 						`Quicky CLI is already at the latest version (${currentVersion}).`,
@@ -2441,25 +2700,43 @@ program
 				return;
 			}
 
-			// Proceed to upgrade
-			console.log(chalk.blue("Upgrading Quicky CLI to the latest version..."));
+			console.log(
+				chalk.blue(
+					"Upgrading Quicky CLI to the latest version...",
+				),
+			);
 			updateCLI();
 		} catch (error) {
-			console.error(chalk.red(`Failed to upgrade the CLI: ${error.message}`));
+			console.error(
+				chalk.red(
+					`Failed to upgrade the CLI: ${error.message}`,
+				),
+			);
 		}
 	});
 
-// Global error handling
+// ---------------------------------------------------------------------------
+// Global error handling (don't exit during config writes)
+// ---------------------------------------------------------------------------
+
+let isWriting = false;
+
+const originalWriteConfig = writeConfig;
+
 process.on("unhandledRejection", (reason, promise) => {
 	console.error(
-		chalk.red(`Unhandled Rejection at: ${promise}, reason: ${reason}`),
+		chalk.red(
+			`Unhandled Rejection at: ${promise}, reason: ${reason}`,
+		),
 	);
-	process.exit(1);
+	if (!isWriting) process.exit(1);
 });
 
 process.on("uncaughtException", (error) => {
-	console.error(chalk.red(`Uncaught Exception: ${error.message}`));
-	process.exit(1);
+	console.error(
+		chalk.red(`Uncaught Exception: ${error.message}`),
+	);
+	if (!isWriting) process.exit(1);
 });
 
 program.parse(process.argv);

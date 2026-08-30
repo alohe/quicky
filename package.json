@@ -1,24 +1,35 @@
 {
   "name": "quicky",
-  "version": "0.1.1",
+  "version": "0.3.0",
   "description": "Quicky is a powerful Node.js CLI that makes server management and deployment a breeze. It's a simple and easy-to-use tool that allows you to manage your servers and deploy your projects with ease.",
   "main": "index.js",
   "type": "module",
   "homepage": "https://quicky.dev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/alohe/quicky"
+    "url": "git+https://github.com/alohe/quicky.git"
   },
   "scripts": {
     "start": "node ."
   },
-  "bin": "./index.js",
+  "bin": {
+    "quicky": "index.js"
+  },
+  "files": [
+    "index.js",
+    "src/",
+    "LICENSE",
+    "readme.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "author": "@alemalohe",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "axios": "^1.7.7",
-    "bcrypt": "^5.1.1",
-    "chalk": "^5.3.0",
+    "bcryptjs": "^2.4.3",
+    "chalk": "5.3.0",
     "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
     "date-fns": "^4.1.0",
@@ -27,7 +38,6 @@
     "latest-version": "^9.0.0",
     "nanospinner": "^1.2.0",
     "semver": "^7.6.3",
-    "simple-git": "^3.27.0",
     "uuid": "^11.0.3"
   }
 }
